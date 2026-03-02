@@ -8,6 +8,7 @@
 
 ### Added
 
+- Dashboard 账号列表新增手动刷新按钮：点击重新拉取额度数据，刷新中按钮旋转并禁用；独立 `refreshing` 状态确保刷新时列表不清空；标题行右侧显示"更新于 HH:MM:SS"时间戳（桌面端可见）
 - 空响应计数器：每个账号追踪 `empty_response_count`，通过 `GET /auth/accounts` 可查看，窗口重置时自动归零
 - 空响应日志增强：日志中显示账号邮箱（`Account xxxx (email) | Empty response`），便于定位问题账号
 - 空响应检测 + 自动换号重试：Codex API 返回 HTTP 200 但无内容时，非流式自动切换账号重试（最多 3 次），流式注入错误提示文本
