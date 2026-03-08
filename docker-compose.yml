@@ -5,6 +5,7 @@ services:
       - "host.docker.internal:host-gateway"
     ports:
       - "${PORT:-8080}:8080"
+      - "1455:1455"
     volumes:
       - ./data:/app/data
       - ./config:/app/config
