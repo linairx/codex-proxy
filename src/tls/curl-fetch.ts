@@ -31,9 +31,9 @@ export async function curlFetchGet(
 ): Promise<CurlFetchResponse> {
   const transport = getTransport();
   const headers = buildAnonymousHeaders();
-  if (!transport.isImpersonate()) {
-    headers["Accept-Encoding"] = "gzip, deflate";
-  }
+  // Let --compressed auto-negotiate Accept-Encoding based on curl's actual
+  // decompression capabilities, avoiding error 61 on builds lacking br/zstd.
+  delete headers["Accept-Encoding"];
 
   const result = await transport.get(url, headers, 30, options?.proxyUrl);
   return {
@@ -54,9 +54,9 @@ export async function curlFetchPost(
 ): Promise<CurlFetchResponse> {
   const transport = getTransport();
   const headers = buildAnonymousHeaders();
-  if (!transport.isImpersonate()) {
-    headers["Accept-Encoding"] = "gzip, deflate";
-  }
+  // Let --compressed auto-negotiate Accept-Encoding based on curl's actual
+  // decompression capabilities, avoiding error 61 on builds lacking br/zstd.
+  delete headers["Accept-Encoding"];
   headers["Content-Type"] = contentType;
 
   const result = await transport.simplePost(url, headers, body, 30, options?.proxyUrl);
