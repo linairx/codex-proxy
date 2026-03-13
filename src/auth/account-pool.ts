@@ -132,10 +132,14 @@ export class AccountPool {
       this.roundRobinIndex++;
       return selected;
     }
-    // least_used: sort by request_count asc, then by last_used asc (LRU)
+    // least_used: sort by request_count asc → window_reset_at asc → last_used asc (LRU)
     candidates.sort((a, b) => {
       const diff = a.usage.request_count - b.usage.request_count;
       if (diff !== 0) return diff;
+      // Prefer accounts whose quota window resets sooner (more fresh capacity)
+      const aReset = a.usage.window_reset_at ?? Infinity;
+      const bReset = b.usage.window_reset_at ?? Infinity;
+      if (aReset !== bReset) return aReset - bReset;
       const aTime = a.usage.last_used ? new Date(a.usage.last_used).getTime() : 0;
       const bTime = b.usage.last_used ? new Date(b.usage.last_used).getTime() : 0;
       return aTime - bTime;

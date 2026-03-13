@@ -59,6 +59,23 @@ function toErrorStatus(status: number): StatusCode {
   return (status >= 400 && status < 600 ? status : 502) as StatusCode;
 }
 
+/** Extract the rate-limit reset duration from a 429 error body, if available. */
+function extractRetryAfterSec(body: string): number | undefined {
+  try {
+    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const error = parsed.error as Record<string, unknown> | undefined;
+    if (!error) return undefined;
+    if (typeof error.resets_in_seconds === "number" && error.resets_in_seconds > 0) {
+      return error.resets_in_seconds;
+    }
+    if (typeof error.resets_at === "number" && error.resets_at > 0) {
+      const diff = error.resets_at - Date.now() / 1000;
+      return diff > 0 ? diff : undefined;
+    }
+  } catch { /* use default backoff */ }
+  return undefined;
+}
+
 /** Check if a CodexApiError indicates the model is not supported on the account's plan. */
 function isModelNotSupportedError(err: CodexApiError): boolean {
   // Only 4xx client errors (exclude 429 rate-limit)
@@ -256,8 +273,29 @@ export async function handleProxyRequest(
           err.message,
         );
         if (err.status === 429) {
-          // P1-6: Count 429s as requests via encapsulated API (no direct entry mutation)
-          accountPool.markRateLimited(activeEntryId, { countRequest: true });
+          const retryAfterSec = extractRetryAfterSec(err.body);
+          accountPool.markRateLimited(activeEntryId, { retryAfterSec, countRequest: true });
+
+          const failedEmail = accountPool.getEntry(activeEntryId)?.email ?? "?";
+          console.warn(
+            `[${fmt.tag}] Account ${activeEntryId} (${failedEmail}) | 429 rate limited` +
+            (retryAfterSec != null ? ` (resets in ${Math.round(retryAfterSec)}s)` : "") +
+            `, trying different account...`,
+          );
+
+          const retry = accountPool.acquire({
+            model: req.codexRequest.model,
+            excludeIds: triedEntryIds,
+          });
+          if (retry) {
+            activeEntryId = retry.entryId;
+            triedEntryIds.push(retry.entryId);
+            const retryProxyUrl = proxyPool?.resolveProxyUrl(retry.entryId);
+            codexApi = new CodexApi(retry.token, retry.accountId, cookieJar, retry.entryId, retryProxyUrl);
+            console.log(`[${fmt.tag}] 429 fallback → account ${retry.entryId}`);
+            continue;
+          }
+
           c.status(429);
           return c.json(fmt.format429(err.message));
         }
