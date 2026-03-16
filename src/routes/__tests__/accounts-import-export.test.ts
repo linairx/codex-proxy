@@ -108,6 +108,17 @@ describe("account import/export", () => {
     }
   });
 
+  it("GET /auth/accounts/export?ids= filters server-side", async () => {
+    const id1 = pool.addAccount("tokenAAAA1234567890");
+    pool.addAccount("tokenBBBB1234567890");
+
+    const res = await app.request(`/auth/accounts/export?ids=${id1}`);
+    expect(res.status).toBe(200);
+    const data = await res.json() as { accounts: Array<{ id: string }> };
+    expect(data.accounts).toHaveLength(1);
+    expect(data.accounts[0].id).toBe(id1);
+  });
+
   // ── Import ─────────────────────────────────────────────
 
   it("POST /auth/accounts/import adds new accounts", async () => {

@@ -87,9 +87,15 @@ export function createAccountRoutes(
     return c.redirect(authUrl);
   });
 
-  // Export all accounts (with tokens) for backup/migration
+  // Export accounts (with tokens) for backup/migration
+  // ?ids=id1,id2 for selective export; omit for all
   app.get("/auth/accounts/export", (c) => {
-    const entries = pool.getAllEntries();
+    let entries = pool.getAllEntries();
+    const idsParam = c.req.query("ids");
+    if (idsParam) {
+      const idSet = new Set(idsParam.split(",").filter(Boolean));
+      entries = entries.filter((e) => idSet.has(e.id));
+    }
     return c.json({ accounts: entries });
   });
 

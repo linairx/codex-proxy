@@ -156,13 +156,11 @@ export function useAccounts() {
   }, []);
 
   const exportAccounts = useCallback(async (selectedIds?: string[]) => {
-    const resp = await fetch("/auth/accounts/export");
+    const params = selectedIds && selectedIds.length > 0
+      ? `?ids=${selectedIds.join(",")}`
+      : "";
+    const resp = await fetch(`/auth/accounts/export${params}`);
     const data = await resp.json() as { accounts: Array<{ id: string }> };
-    // Filter to selected accounts if specified
-    if (selectedIds && selectedIds.length > 0) {
-      const idSet = new Set(selectedIds);
-      data.accounts = data.accounts.filter((a) => idSet.has(a.id));
-    }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -184,7 +182,12 @@ export function useAccounts() {
     errors: string[];
   }> => {
     const text = await file.text();
-    const parsed = JSON.parse(text) as Record<string, unknown>;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { success: false, added: 0, updated: 0, failed: 0, errors: ["Invalid JSON file"] };
+    }
     // Support both { accounts: [...] } (export format) and raw array
     const accounts = Array.isArray(parsed)
       ? parsed
