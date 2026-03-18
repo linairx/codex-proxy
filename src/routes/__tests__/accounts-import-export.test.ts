@@ -31,8 +31,8 @@ vi.mock("../../config.js", () => ({
   })),
 }));
 
-// Mock JWT utilities — all tokens are "valid" by default
-const mockIsTokenExpired = vi.hoisted(() => vi.fn(() => false));
+// Mock JWT utilities for AccountPool bookkeeping
+const mockIsTokenExpired = vi.fn(() => false);
 vi.mock("../../auth/jwt-utils.js", () => ({
   decodeJwtPayload: vi.fn(() => ({ exp: Math.floor(Date.now() / 1000) + 3600 })),
   extractChatGptAccountId: vi.fn((token: string) => `acct-${token.slice(0, 8)}`),
@@ -43,12 +43,17 @@ vi.mock("../../auth/jwt-utils.js", () => ({
   isTokenExpired: mockIsTokenExpired,
 }));
 
-vi.mock("../../utils/jitter.js", () => ({
-  jitter: vi.fn((val: number) => val),
+const mockValidateManualToken = vi.fn((token: string) => (
+  token === "expiredToken12345678"
+    ? { valid: false, error: "Token is expired" }
+    : { valid: true }
+));
+vi.mock("../../auth/chatgpt-oauth.js", () => ({
+  validateManualToken: mockValidateManualToken,
 }));
 
-vi.mock("../../models/model-store.js", () => ({
-  getModelPlanTypes: vi.fn(() => []),
+vi.mock("../../utils/jitter.js", () => ({
+  jitter: vi.fn((val: number) => val),
 }));
 
 import { Hono } from "hono";
@@ -69,6 +74,11 @@ describe("account import/export", () => {
 
   beforeEach(() => {
     mockIsTokenExpired.mockReturnValue(false);
+    mockValidateManualToken.mockImplementation((token: string) => (
+      token === "expiredToken12345678"
+        ? { valid: false, error: "Token is expired" }
+        : { valid: true }
+    ));
     pool = new AccountPool();
     const routes = createAccountRoutes(
       pool,
@@ -173,10 +183,11 @@ describe("account import/export", () => {
   });
 
   it("POST /auth/accounts/import handles invalid tokens", async () => {
-    // Make isTokenExpired return true for specific tokens
-    mockIsTokenExpired.mockImplementation(
-      ((...args: unknown[]) => args[0] === "expiredToken12345678") as () => boolean,
-    );
+    mockValidateManualToken.mockImplementation((token: string) => (
+      token === "expiredToken12345678"
+        ? { valid: false, error: "Token is expired" }
+        : { valid: true }
+    ));
 
     const res = await app.request("/auth/accounts/import", {
       method: "POST",

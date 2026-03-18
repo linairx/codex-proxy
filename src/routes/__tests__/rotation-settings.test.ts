@@ -129,7 +129,7 @@ describe("POST /admin/rotation-settings", () => {
   it("accepts all three valid strategies", async () => {
     const app = createWebRoutes(mockPool);
     for (const strategy of ["least_used", "round_robin", "sticky"]) {
-      vi.mocked(mutateYaml).mockClear();
+      (mutateYaml as ReturnType<typeof vi.fn>).mockClear();
       const res = await app.request("/admin/rotation-settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

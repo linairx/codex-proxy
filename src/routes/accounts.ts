@@ -26,7 +26,13 @@ import type { CodexQuota, AccountInfo } from "../auth/types.js";
 import type { CookieJar } from "../proxy/cookie-jar.js";
 import type { ProxyPool } from "../proxy/proxy-pool.js";
 import { toQuota } from "../auth/quota-utils.js";
-import { clearWarnings, getActiveWarnings, getWarningsLastUpdated } from "../auth/quota-warnings.js";
+import {
+  clearWarnings,
+  evaluateThresholds,
+  getActiveWarnings,
+  getWarningsLastUpdated,
+  updateWarnings,
+} from "../auth/quota-warnings.js";
 
 const BulkImportSchema = z.object({
   accounts: z.array(z.object({
@@ -152,6 +158,30 @@ export function createAccountRoutes(
             const resetAt = usage.rate_limit.primary_window?.reset_at ?? null;
             const windowSec = usage.rate_limit.primary_window?.limit_window_seconds ?? null;
             pool.syncRateLimitWindow(acct.id, resetAt, windowSec);
+
+            const thresholds = getConfig().quota.warning_thresholds;
+            const warnings = [];
+            const primaryWarning = evaluateThresholds(
+              acct.id,
+              entry.email,
+              quota.rate_limit.used_percent,
+              quota.rate_limit.reset_at,
+              "primary",
+              thresholds.primary,
+            );
+            if (primaryWarning) warnings.push(primaryWarning);
+
+            const secondaryWarning = evaluateThresholds(
+              acct.id,
+              entry.email,
+              quota.secondary_rate_limit?.used_percent ?? null,
+              quota.secondary_rate_limit?.reset_at ?? null,
+              "secondary",
+              thresholds.secondary,
+            );
+            if (secondaryWarning) warnings.push(secondaryWarning);
+            updateWarnings(acct.id, warnings);
+
             // Re-read usage after potential reset
             const freshAcct = pool.getAccounts().find((a) => a.id === acct.id) ?? acct;
             return {

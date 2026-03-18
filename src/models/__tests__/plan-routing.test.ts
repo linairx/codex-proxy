@@ -19,17 +19,13 @@ vi.mock("../../config.js", () => ({
   })),
 }));
 
-vi.mock("fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("fs")>();
-  return {
-    ...actual,
-    readFileSync: vi.fn(() => "models: []"),
-    writeFileSync: vi.fn(),
-    writeFile: vi.fn((_p: string, _d: string, _e: string, cb: (err: Error | null) => void) => cb(null)),
-    existsSync: vi.fn(() => false),
-    mkdirSync: vi.fn(),
-  };
-});
+vi.mock("fs", () => ({
+  readFileSync: vi.fn(() => "models: []"),
+  writeFileSync: vi.fn(),
+  writeFile: vi.fn((_p: string, _d: string, _e: string, cb: (err: Error | null) => void) => cb(null)),
+  existsSync: vi.fn(() => false),
+  mkdirSync: vi.fn(),
+}));
 
 vi.mock("js-yaml", () => ({
   default: {
