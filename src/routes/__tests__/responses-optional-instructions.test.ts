@@ -32,21 +32,17 @@ vi.mock("../../paths.js", () => ({
   getConfigDir: vi.fn(() => "/tmp/test-responses-config"),
 }));
 
-vi.mock("fs", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("fs")>();
-  return {
-    ...actual,
-    readFileSync: vi.fn(() => "models: []"),
-    writeFileSync: vi.fn(),
-    writeFile: vi.fn(
-      (_p: string, _d: string, _e: string, cb: (err: Error | null) => void) =>
-        cb(null),
-    ),
-    existsSync: vi.fn(() => false),
-    mkdirSync: vi.fn(),
-    renameSync: vi.fn(),
-  };
-});
+vi.mock("fs", () => ({
+  readFileSync: vi.fn(() => "models: []"),
+  writeFileSync: vi.fn(),
+  writeFile: vi.fn(
+    (_p: string, _d: string, _e: string, cb: (err: Error | null) => void) =>
+      cb(null),
+  ),
+  existsSync: vi.fn(() => false),
+  mkdirSync: vi.fn(),
+  renameSync: vi.fn(),
+}));
 
 vi.mock("js-yaml", () => ({
   default: {
@@ -74,14 +70,45 @@ vi.mock("../../utils/retry.js", () => ({
   withRetry: vi.fn(async (fn: () => Promise<unknown>) => fn()),
 }));
 
-// Capture the codexRequest that handleProxyRequest receives
+// Capture the codexRequest sent through the real proxy handler
 let capturedCodexRequest: unknown = null;
 
-vi.mock("../shared/proxy-handler.js", () => ({
-  handleProxyRequest: vi.fn(async (c, _pool, _jar, proxyReq) => {
-    capturedCodexRequest = proxyReq.codexRequest;
-    return c.json({ ok: true });
-  }),
+vi.mock("../../proxy/codex-api.js", () => ({
+  CodexApi: vi.fn().mockImplementation(() => ({
+    createResponse: vi.fn(async (request: unknown) => {
+      capturedCodexRequest = request;
+      return new Response(
+        [
+          'event: response.completed',
+          'data: {"response":{"id":"resp-test","output":[],"usage":{"input_tokens":0,"output_tokens":0}}}',
+          '',
+        ].join("\n"),
+        {
+          headers: { "Content-Type": "text/event-stream" },
+        },
+      );
+    }),
+    parseStream: vi.fn(async function* (response: Response) {
+      const text = await response.text();
+      for (const chunk of text.split("\n\n")) {
+        if (!chunk.trim()) continue;
+        const lines = chunk.split("\n");
+        const event = lines.find((line) => line.startsWith("event: "))?.slice(7) ?? "message";
+        const dataLine = lines.find((line) => line.startsWith("data: "))?.slice(6) ?? "{}";
+        yield { event, data: JSON.parse(dataLine) };
+      }
+    }),
+  })),
+  CodexApiError: class extends Error {
+    status: number;
+    body: string;
+    constructor(status: number, body: string) {
+      super(body);
+      this.name = "CodexApiError";
+      this.status = status;
+      this.body = body;
+    }
+  },
 }));
 
 // ── Imports ─────────────────────────────────────────────────────────

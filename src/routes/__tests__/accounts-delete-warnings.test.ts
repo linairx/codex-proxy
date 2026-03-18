@@ -30,7 +30,7 @@ vi.mock("../../config.js", () => ({
   })),
 }));
 
-const mockIsTokenExpired = vi.hoisted(() => vi.fn(() => false));
+const mockIsTokenExpired = vi.fn(() => false);
 vi.mock("../../auth/jwt-utils.js", () => ({
   decodeJwtPayload: vi.fn(() => ({ exp: Math.floor(Date.now() / 1000) + 3600 })),
   extractChatGptAccountId: vi.fn((token: string) => `acct-${token.slice(0, 8)}`),

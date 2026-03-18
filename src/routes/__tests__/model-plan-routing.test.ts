@@ -205,7 +205,7 @@ import {
   handleProxyRequest,
   type FormatAdapter,
   type ProxyRequest,
-} from "../shared/proxy-handler.js";
+} from "../shared/proxy-handler.ts";
 import type { StatusCode } from "hono/utils/http-status";
 import { createModelRoutes } from "../models.js";
 import { triggerImmediateRefresh } from "../../models/model-fetcher.js";
