@@ -1,16 +1,24 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AccountEntry, AccountsFile } from "../types.js";
 
-// Must use vi.hoisted() for mock variables referenced in vi.mock factories
-const mockFs = vi.hoisted(() => ({
-  existsSync: vi.fn(() => false),
-  readFileSync: vi.fn(() => ""),
-  writeFileSync: vi.fn(),
-  renameSync: vi.fn(),
-  mkdirSync: vi.fn(),
-}));
+let mockFs: {
+  existsSync: ReturnType<typeof vi.fn>;
+  readFileSync: ReturnType<typeof vi.fn>;
+  writeFileSync: ReturnType<typeof vi.fn>;
+  renameSync: ReturnType<typeof vi.fn>;
+  mkdirSync: ReturnType<typeof vi.fn>;
+};
 
-vi.mock("fs", () => mockFs);
+vi.mock("fs", () => {
+  mockFs = {
+    existsSync: vi.fn(() => false),
+    readFileSync: vi.fn(() => ""),
+    writeFileSync: vi.fn(),
+    renameSync: vi.fn(),
+    mkdirSync: vi.fn(),
+  };
+  return mockFs;
+});
 
 vi.mock("../../paths.js", () => ({
   getDataDir: vi.fn(() => "/tmp/test-persistence"),
