@@ -252,6 +252,14 @@ export function createProxyRoutes(proxyPool: ProxyPool, accountPool: AccountPool
       return c.json({ error: `Unsupported rule: "${body.rule ?? ""}". Supported: "round-robin".` });
     }
 
+    const validAccountIds = new Set(accountPool.getAccounts().map((account) => account.id));
+    for (const accountId of body.accountIds) {
+      if (!validAccountIds.has(accountId)) {
+        c.status(400);
+        return c.json({ error: `Invalid accountId: "${accountId}"` });
+      }
+    }
+
     for (const pid of body.targetProxyIds) {
       if (!isValidProxyId(pid)) {
         c.status(400);
