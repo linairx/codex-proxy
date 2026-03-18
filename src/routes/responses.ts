@@ -274,14 +274,14 @@ export function createResponsesRoutes(
       });
     }
 
-    if (!isRecord(body) || typeof body.instructions !== "string") {
+    if (!isRecord(body)) {
       c.status(400);
       return c.json({
         type: "error",
         error: {
           type: "invalid_request_error",
           code: "invalid_request",
-          message: "Missing required field: instructions (string)",
+          message: "Request body must be a JSON object",
         },
       });
     }
@@ -298,7 +298,7 @@ export function createResponsesRoutes(
     // When client sends stream:false, the proxy collects SSE events and returns assembled JSON.
     const codexRequest: CodexResponsesRequest = {
       model: modelId,
-      instructions: body.instructions,
+      instructions: typeof body.instructions === "string" ? body.instructions : "",
       input: Array.isArray(body.input) ? (body.input as CodexInputItem[]) : [],
       stream: true,
       store: false,

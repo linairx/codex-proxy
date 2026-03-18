@@ -6,6 +6,24 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `/v1/responses` 不再强制要求 `instructions` 字段，未传时默认空字符串（#71）
+  - 修复 Cherry 等第三方客户端不传 `instructions` 时返回 400 的兼容性问题
+- CI 构建修复：WebSocket 传输 `instructions` 类型不匹配（TS2322）导致 Electron/Docker 编译失败
+- `shared/i18n/translations.ts` 移除中英文重复 `selectAll` key（Vite 警告）
+- `sync-changelog.yml` 推送步骤加 rebase 重试（解决与 bump-electron 并行推送竞态）
+
+### Changed
+
+- 架构重构：降低模块耦合、改善可测试性
+  - 提取 `codex-types.ts`：API 类型定义与类实现分离，20+ 文件只需类型不需类
+  - 提取 `rotation-strategy.ts`：轮换策略从 AccountPool 解耦为纯函数模块（10 新测试）
+  - 拆分 `web.ts`（605 LOC）→ `routes/admin/`（health/update/connection/settings 4 子路由）
+  - 提取 `account-persistence.ts`：文件系统持久化逻辑从 AccountPool 分离为可注入接口（8 新测试）
+  - 拆分 `codex-api.ts`：SSE 解析（`codex-sse.ts`）、用量查询（`codex-usage.ts`）、模型发现（`codex-models.ts`）独立为纯函数模块（10 新测试）
+  - 所有提取模块通过 re-export 保持现有 import 路径兼容
+
 ### Added
 
 - Sticky rotation strategy（#107）：新增 `sticky` 账号轮换策略，持续使用同一账号直到限速或额度耗尽
@@ -29,6 +47,7 @@
 
 ### Fixed
 
+- 删除账号后额度预警横幅未清除：`DELETE /auth/accounts/:id` 漏调 `clearWarnings()`，导致已删除账号的 quota warning 残留在前端 (#100)
 - macOS Electron 桌面版登录报 `spawn Unknown system error -86`：CI 在 arm64 runner 上同时构建 arm64/x64 DMG，但只下载 arm64 的 curl-impersonate，导致 Intel Mac 用户 spawn 失败（EBADARCH）；拆分为 per-arch 构建 + `setup-curl.ts` 支持 `--arch` 交叉下载；错误提示改为明确的架构不匹配诊断 (#96)
 - 默认关闭 desktop context 注入：之前每次请求注入 ~1500 token 的 Codex Desktop 系统提示，导致 prompt_tokens 虚高；新增 `model.inject_desktop_context` 配置项（默认 `false`），需要时可手动开启 (#95)
 
