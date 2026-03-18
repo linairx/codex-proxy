@@ -151,8 +151,14 @@ export class CurlCliTransport implements TlsTransport {
         }
         if (!headersParsed) {
           reject(new Error(`curl exited with code ${code}: ${stderrBuf}`));
+        } else if (code !== 0 && code !== null) {
+          // curl died mid-stream (e.g. connection reset, SIGPIPE) — signal error to reader
+          try {
+            bodyController?.error(new Error(`curl exited with code ${code} mid-stream: ${stderrBuf.trim() || "connection lost"}`));
+          } catch { /* stream already closed */ }
+        } else {
+          bodyController?.close();
         }
-        bodyController?.close();
       });
 
       child.on("error", (err) => {

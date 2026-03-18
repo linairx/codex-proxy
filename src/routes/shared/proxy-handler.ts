@@ -153,7 +153,13 @@ export async function handleProxyRequest(
               () => {},
               req.tupleSchema,
             )) {
-              await s.write(chunk);
+              try {
+                await s.write(chunk);
+              } catch {
+                // Client disconnected mid-stream — stop reading upstream
+                abortController.abort();
+                return;
+              }
             }
           } catch (err) {
             // P2-8: Send error SSE event to client before closing
@@ -161,7 +167,6 @@ export async function handleProxyRequest(
               const errMsg = err instanceof Error ? err.message : "Stream interrupted";
               await s.write(`data: ${JSON.stringify({ error: { message: errMsg, type: "stream_error" } })}\n\n`);
             } catch { /* client already gone */ }
-            throw err;
           } finally {
             // P0-2: Kill curl subprocess if still running
             abortController.abort();
