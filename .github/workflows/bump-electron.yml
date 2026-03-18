@@ -78,6 +78,18 @@ jobs:
           git add package.json packages/electron/package.json
           git commit -m "chore: bump version to ${NEW_VERSION} [skip ci]"
           git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
-          git push origin master --follow-tags
 
-          echo "Bumped to $NEW_VERSION, tagged $NEW_TAG"
+          # Retry push with rebase on conflict (other workflows may push concurrently)
+          for i in 1 2 3; do
+            if git push origin master --follow-tags; then
+              echo "Bumped to $NEW_VERSION, tagged $NEW_TAG"
+              exit 0
+            fi
+            echo "Push failed (attempt $i/3), rebasing and retrying..."
+            git tag -d "$NEW_TAG"
+            git pull --rebase origin master
+            git tag -a "$NEW_TAG" -m "Release ${NEW_TAG}"
+            sleep 2
+          done
+          echo "::error::Push failed after 3 attempts"
+          exit 1
