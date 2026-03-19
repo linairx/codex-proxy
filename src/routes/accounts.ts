@@ -5,6 +5,8 @@
  * GET    /auth/accounts?quota=true — list all accounts with official quota
  * POST   /auth/accounts            — add account (token paste)
  * DELETE /auth/accounts/:id        — remove account
+ * POST   /auth/accounts/:id/disable — disable account
+ * POST   /auth/accounts/:id/enable  — enable account
  * POST   /auth/accounts/:id/reset-usage — reset usage stats
  * GET    /auth/accounts/:id/quota  — query single account's official quota
  * GET    /auth/accounts/:id/cookies — view stored cookies
@@ -261,6 +263,30 @@ export function createAccountRoutes(
     proxyPool?.unassign(id);
     clearWarnings(id);
     return c.json({ success: true });
+  });
+
+  // Disable account
+  app.post("/auth/accounts/:id/disable", (c) => {
+    const id = c.req.param("id");
+    const entry = pool.getEntry(id);
+    if (!entry) {
+      c.status(404);
+      return c.json({ error: "Account not found" });
+    }
+    pool.markStatus(id, "disabled");
+    return c.json({ success: true, account: { id, status: "disabled" } });
+  });
+
+  // Enable account
+  app.post("/auth/accounts/:id/enable", (c) => {
+    const id = c.req.param("id");
+    const entry = pool.getEntry(id);
+    if (!entry) {
+      c.status(404);
+      return c.json({ error: "Account not found" });
+    }
+    pool.markStatus(id, "active");
+    return c.json({ success: true, account: { id, status: "active" } });
   });
 
   // Reset usage
