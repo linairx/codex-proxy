@@ -43,10 +43,6 @@ vi.mock("../../utils/jitter.js", () => ({
   jitter: vi.fn((val: number) => val),
 }));
 
-vi.mock("../../models/model-store.js", () => ({
-  getModelPlanTypes: vi.fn(() => []),
-}));
-
 vi.mock("../../tls/transport.js", () => ({
   getTransport: vi.fn(),
   getTransportInfo: vi.fn(() => ({})),
@@ -173,6 +169,21 @@ describe("PUT /api/proxies/:id", () => {
       name: "proxy-both-new",
       url: "http://127.0.0.1:9103/",
     }));
+  });
+
+  it("updates assigned account resolution to the latest proxy URL", async () => {
+    const accountId = accountPool.addAccount("token-update-bound-url");
+    const proxyId = proxyPool.add("proxy-update-bound-url", "http://127.0.0.1:9004");
+    proxyPool.assign(accountId, proxyId);
+
+    const res = await app.request(`/api/proxies/${proxyId}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: "http://127.0.0.1:9104" }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(proxyPool.resolveProxyUrl(accountId)).toBe("http://127.0.0.1:9104");
   });
 
   it("returns a stable not-found error for unknown proxy ids", async () => {

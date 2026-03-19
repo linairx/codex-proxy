@@ -45,10 +45,6 @@ vi.mock("../../utils/jitter.js", () => ({
   jitter: vi.fn((val: number) => val),
 }));
 
-vi.mock("../../models/model-store.js", () => ({
-  getModelPlanTypes: vi.fn(() => []),
-}));
-
 import { Hono } from "hono";
 import { AccountPool } from "../../auth/account-pool.js";
 import { createAccountRoutes } from "../../routes/accounts.js";

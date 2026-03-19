@@ -42,10 +42,6 @@ vi.mock("../../utils/jitter.js", () => ({
   jitter: vi.fn((val: number) => val),
 }));
 
-vi.mock("../../models/model-store.js", () => ({
-  getModelPlanTypes: vi.fn(() => []),
-}));
-
 vi.mock("../../tls/transport.js", () => ({
   getTransport: vi.fn(),
   getTransportInfo: vi.fn(() => ({})),
@@ -84,7 +80,7 @@ describe("proxy assignments import/export/apply/bulk", () => {
     expect(proxyPool.getAllAssignments()).toEqual([]);
   });
 
-  it("GET /api/proxies/assignments/export returns stable email + proxyId shape for explicit assignments only", async () => {
+  it("GET /api/proxies/assignments/export returns configured and resolved proxy views for explicit assignments only", async () => {
     const accountId1 = accountPool.addAccount("token-export-1");
     accountPool.addAccount("token-export-2");
     const proxyId = proxyPool.add("proxy-export", "http://127.0.0.1:8401");
@@ -99,9 +95,16 @@ describe("proxy assignments import/export/apply/bulk", () => {
       {
         email: "token-export-1@test.com",
         proxyId,
+        resolvedProxyId: proxyId,
+        resolvedProxyName: "proxy-export",
       },
     ]);
-    expect(Object.keys(data.assignments[0]).sort()).toEqual(["email", "proxyId"]);
+    expect(Object.keys(data.assignments[0]).sort()).toEqual([
+      "email",
+      "proxyId",
+      "resolvedProxyId",
+      "resolvedProxyName",
+    ]);
   });
 
   it("POST /api/proxies/assignments/import previews changes and unchanged, skips unknown email, and does not apply", async () => {
@@ -252,10 +255,20 @@ describe("proxy assignments import/export/apply/bulk", () => {
     const exportBeforeRes = await app.request("/api/proxies/assignments/export");
     expect(exportBeforeRes.status).toBe(200);
     const exportedBefore = await exportBeforeRes.json() as {
-      assignments: Array<{ email: string; proxyId: string }>;
+      assignments: Array<{
+        email: string;
+        proxyId: string;
+        resolvedProxyId: string;
+        resolvedProxyName: string;
+      }>;
     };
     expect(exportedBefore.assignments).toEqual([
-      { email: "token-roundtrip-1@test.com", proxyId: proxyId1 },
+      {
+        email: "token-roundtrip-1@test.com",
+        proxyId: proxyId1,
+        resolvedProxyId: proxyId1,
+        resolvedProxyName: "proxy-roundtrip-1",
+      },
     ]);
 
     const previewRes = await app.request("/api/proxies/assignments/import", {
@@ -308,11 +321,26 @@ describe("proxy assignments import/export/apply/bulk", () => {
     const exportAfterRes = await app.request("/api/proxies/assignments/export");
     expect(exportAfterRes.status).toBe(200);
     const exportedAfter = await exportAfterRes.json() as {
-      assignments: Array<{ email: string; proxyId: string }>;
+      assignments: Array<{
+        email: string;
+        proxyId: string;
+        resolvedProxyId: string;
+        resolvedProxyName: string;
+      }>;
     };
     expect(exportedAfter.assignments).toEqual([
-      { email: "token-roundtrip-1@test.com", proxyId: proxyId2 },
-      { email: "token-roundtrip-2@test.com", proxyId: "auto" },
+      {
+        email: "token-roundtrip-1@test.com",
+        proxyId: proxyId2,
+        resolvedProxyId: proxyId2,
+        resolvedProxyName: "proxy-roundtrip-2",
+      },
+      {
+        email: "token-roundtrip-2@test.com",
+        proxyId: "auto",
+        resolvedProxyId: proxyId1,
+        resolvedProxyName: "proxy-roundtrip-1",
+      },
     ]);
   });
 });

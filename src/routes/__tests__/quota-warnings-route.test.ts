@@ -57,10 +57,6 @@ vi.mock("../../utils/jitter.js", () => ({
   jitter: vi.fn((val: number) => val),
 }));
 
-vi.mock("../../models/model-store.js", () => ({
-  getModelPlanTypes: vi.fn(() => []),
-}));
-
 const mockGetUsage = vi.fn();
 
 vi.mock("../../proxy/codex-api.js", () => ({

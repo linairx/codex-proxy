@@ -66,113 +66,6 @@ vi.mock("../../models/model-fetcher.js", () => ({
 }));
 
 const mockCreateResponse = vi.fn();
-const mockCatalog: Array<{
-  id: string;
-  displayName: string;
-  description: string;
-  isDefault: boolean;
-  supportedReasoningEfforts: Array<{ reasoningEffort: string; description: string }>;
-  defaultReasoningEffort: string;
-  inputModalities: string[];
-  supportsPersonality: boolean;
-  upgrade: string | null;
-  source: "static" | "backend";
-}> = [];
-const mockAliases: Record<string, string> = {};
-const mockPlanModelMap = new Map<string, Set<string>>();
-
-function resetMockModelStore() {
-  mockCatalog.length = 0;
-  mockCatalog.push(
-    {
-      id: "gpt-5.2-codex",
-      displayName: "GPT-5.2 Codex",
-      description: "Default coding model",
-      isDefault: true,
-      supportedReasoningEfforts: [
-        { reasoningEffort: "medium", description: "Balanced" },
-        { reasoningEffort: "high", description: "Deeper" },
-      ],
-      defaultReasoningEffort: "medium",
-      inputModalities: ["text"],
-      supportsPersonality: false,
-      upgrade: null,
-      source: "static",
-    },
-    {
-      id: "gpt-5.4",
-      displayName: "GPT-5.4",
-      description: "General model",
-      isDefault: false,
-      supportedReasoningEfforts: [
-        { reasoningEffort: "low", description: "Fast" },
-        { reasoningEffort: "medium", description: "Balanced" },
-      ],
-      defaultReasoningEffort: "low",
-      inputModalities: ["text", "image"],
-      supportsPersonality: true,
-      upgrade: "gpt-5.4-pro",
-      source: "static",
-    },
-  );
-
-  for (const key of Object.keys(mockAliases)) {
-    delete mockAliases[key];
-  }
-  mockAliases["gpt-5"] = "gpt-5.4";
-  mockAliases.codex = "gpt-5.2-codex";
-  mockPlanModelMap.clear();
-}
-
-vi.mock("../../models/model-store.js", () => ({
-  loadStaticModels: vi.fn(() => {
-    resetMockModelStore();
-  }),
-  applyBackendModelsForPlan: vi.fn((planType: string, backendModels: Array<{ slug?: string; id?: string; name?: string }>) => {
-    const ids = new Set<string>();
-    for (const raw of backendModels) {
-      const id = raw.slug ?? raw.id ?? raw.name ?? "";
-      if (!id) continue;
-      ids.add(id);
-      if (!mockCatalog.some((model) => model.id === id)) {
-        mockCatalog.push({
-          id,
-          displayName: id,
-          description: "",
-          isDefault: false,
-          supportedReasoningEfforts: [{ reasoningEffort: "medium", description: "Default" }],
-          defaultReasoningEffort: "medium",
-          inputModalities: ["text"],
-          supportsPersonality: false,
-          upgrade: null,
-          source: "backend",
-        });
-      }
-    }
-    mockPlanModelMap.set(planType, ids);
-  }),
-  getModelPlanTypes: vi.fn((modelId: string) => {
-    const plans: string[] = [];
-    for (const [planType, ids] of mockPlanModelMap) {
-      if (ids.has(modelId)) plans.push(planType);
-    }
-    return plans;
-  }),
-  getModelCatalog: vi.fn(() => mockCatalog.map((model) => ({ ...model }))),
-  getModelAliases: vi.fn(() => ({ ...mockAliases })),
-  getModelInfo: vi.fn((modelId: string) => {
-    const resolved = mockAliases[modelId] ?? modelId;
-    const model = mockCatalog.find((entry) => entry.id === resolved);
-    return model ? { ...model } : undefined;
-  }),
-  getModelStoreDebug: vi.fn(() => ({
-    catalogSize: mockCatalog.length,
-    aliasCount: Object.keys(mockAliases).length,
-    planMap: Object.fromEntries(
-      [...mockPlanModelMap.entries()].map(([planType, ids]) => [planType, [...ids]]),
-    ),
-  })),
-}));
 
 vi.mock("../../proxy/codex-api.js", () => ({
   CodexApi: vi.fn().mockImplementation(() => ({
@@ -201,11 +94,12 @@ import {
   loadStaticModels,
   applyBackendModelsForPlan,
 } from "../../models/model-store.js";
+import { extractUserProfile } from "../../auth/jwt-utils.js";
 import {
   handleProxyRequest,
   type FormatAdapter,
   type ProxyRequest,
-} from "../shared/proxy-handler.ts";
+} from "../shared/proxy-handler.js";
 import type { StatusCode } from "hono/utils/http-status";
 import { createModelRoutes } from "../models.js";
 import { triggerImmediateRefresh } from "../../models/model-fetcher.js";
@@ -251,24 +145,6 @@ function makeProxyRequest(model: string): ProxyRequest {
   };
 }
 
-function addAccountWithPlan(pool: AccountPool, token: string, planType: "free" | "team") {
-  const entryId = pool.addAccount(token);
-  const entry = pool.getEntry(entryId);
-  if (!entry) {
-    throw new Error(`Failed to create test account for ${token}`);
-  }
-  entry.planType = planType;
-  return entryId;
-}
-
-function addFreeAccount(pool: AccountPool, token = "free-token-1") {
-  return addAccountWithPlan(pool, token, "free");
-}
-
-function addTeamAccount(pool: AccountPool, token = "team-token-1") {
-  return addAccountWithPlan(pool, token, "team");
-}
-
 // ── Tests ───────────────────────────────────────────────────────────
 
 describe("plan routing through proxy handler", () => {
@@ -282,6 +158,14 @@ describe("plan routing through proxy handler", () => {
 
     loadStaticModels();
 
+    (extractUserProfile as ReturnType<typeof vi.fn>).mockImplementation((token: string) => {
+      if (token.startsWith("free-"))
+        return { email: "free@test.com", chatgpt_plan_type: "free" };
+      if (token.startsWith("team-"))
+        return { email: "team@test.com", chatgpt_plan_type: "team" };
+      return null;
+    });
+
     pool = new AccountPool();
     mockCreateResponse.mockResolvedValue(
       new Response(JSON.stringify({ ok: true })),
@@ -293,7 +177,7 @@ describe("plan routing through proxy handler", () => {
   });
 
   it("free-only pool + team-only model → 503", async () => {
-    addFreeAccount(pool);
+    pool.addAccount("free-token-1");
     applyBackendModelsForPlan("team", [
       makeModel("gpt-5.4"),
       makeModel("gpt-5.2-codex"),
@@ -318,7 +202,7 @@ describe("plan routing through proxy handler", () => {
   });
 
   it("free-only pool + model in both plans → 200", async () => {
-    addFreeAccount(pool);
+    pool.addAccount("free-token-1");
     applyBackendModelsForPlan("free", [
       makeModel("gpt-5.4"),
       makeModel("gpt-5.2-codex"),
@@ -344,7 +228,7 @@ describe("plan routing through proxy handler", () => {
   });
 
   it("plan map update → previously blocked request now succeeds", async () => {
-    addFreeAccount(pool);
+    pool.addAccount("free-token-1");
     applyBackendModelsForPlan("team", [makeModel("gpt-5.4")]);
     applyBackendModelsForPlan("free", [makeModel("gpt-5.2-codex")]);
 
@@ -375,7 +259,7 @@ describe("plan routing through proxy handler", () => {
   });
 
   it("team-only pool + team model → 200", async () => {
-    addTeamAccount(pool);
+    pool.addAccount("team-token-1");
     applyBackendModelsForPlan("team", [
       makeModel("gpt-5.4"),
       makeModel("gpt-5.2-codex"),
@@ -398,8 +282,8 @@ describe("plan routing through proxy handler", () => {
   });
 
   it("mixed pool prefers plan-matched account", async () => {
-    addFreeAccount(pool);
-    addTeamAccount(pool);
+    pool.addAccount("free-token-1");
+    pool.addAccount("team-token-1");
     applyBackendModelsForPlan("team", [
       makeModel("gpt-5.4"),
       makeModel("gpt-5.2-codex"),

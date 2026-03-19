@@ -60,6 +60,32 @@ describe("toQuota", () => {
     expect(quota.secondary_rate_limit!.used_percent).toBe(75);
     expect(quota.secondary_rate_limit!.reset_at).toBe(1700500000);
     expect(quota.secondary_rate_limit!.limit_window_seconds).toBe(604800);
+    expect(quota.secondary_rate_limit!.limit_reached).toBe(false);
+  });
+
+  it("treats a fully used secondary window as exhausted even when primary limit_reached is false", () => {
+    const quota = toQuota(makeUsageResponse({
+      rate_limit: {
+        allowed: true,
+        limit_reached: false,
+        primary_window: {
+          used_percent: 25,
+          reset_at: 1700000000,
+          limit_window_seconds: 3600,
+          reset_after_seconds: 3000,
+        },
+        secondary_window: {
+          used_percent: 100,
+          reset_at: 1700600000,
+          limit_window_seconds: 604800,
+          reset_after_seconds: 1,
+        },
+      },
+    }));
+
+    expect(quota.secondary_rate_limit).not.toBeNull();
+    expect(quota.secondary_rate_limit!.limit_reached).toBe(true);
+    expect(quota.secondary_rate_limit!.reset_at).toBe(1700600000);
   });
 
   it("converts code review rate limit when present", () => {

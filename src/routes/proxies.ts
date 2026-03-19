@@ -21,6 +21,37 @@ import type { AccountPool } from "../auth/account-pool.js";
 export function createProxyRoutes(proxyPool: ProxyPool, accountPool: AccountPool): Hono {
   const app = new Hono();
 
+  const getResolvedAssignmentView = (accountId: string): {
+    resolvedProxyId: string;
+    resolvedProxyName: string;
+  } => {
+    const configuredProxyId = proxyPool.getAssignment(accountId);
+    if (configuredProxyId === "global") {
+      return { resolvedProxyId: "global", resolvedProxyName: "Global Default" };
+    }
+    if (configuredProxyId === "direct") {
+      return { resolvedProxyId: "direct", resolvedProxyName: "Direct (No Proxy)" };
+    }
+
+    const resolvedProxyUrl = proxyPool.resolveProxyUrl(accountId);
+    if (resolvedProxyUrl === undefined) {
+      return { resolvedProxyId: "global", resolvedProxyName: "Global Default" };
+    }
+    if (resolvedProxyUrl === null) {
+      return { resolvedProxyId: "direct", resolvedProxyName: "Direct (No Proxy)" };
+    }
+
+    const resolvedProxy = proxyPool.getAll().find((proxy) => proxy.url === resolvedProxyUrl);
+    if (resolvedProxy) {
+      return { resolvedProxyId: resolvedProxy.id, resolvedProxyName: resolvedProxy.name };
+    }
+
+    return {
+      resolvedProxyId: configuredProxyId,
+      resolvedProxyName: proxyPool.getAssignmentDisplayName(accountId),
+    };
+  };
+
   // List all proxies + assignments (credentials masked)
   app.get("/api/proxies", (c) => {
     return c.json({
@@ -201,6 +232,7 @@ export function createProxyRoutes(proxyPool: ProxyPool, accountPool: AccountPool
       status: a.status,
       proxyId: proxyPool.getAssignment(a.id),
       proxyName: proxyPool.getAssignmentDisplayName(a.id),
+      ...getResolvedAssignmentView(a.id),
     }));
 
     return c.json({
@@ -286,11 +318,21 @@ export function createProxyRoutes(proxyPool: ProxyPool, accountPool: AccountPool
     const emailMap = new Map(accountPool.getAccounts().map((a) => [a.id, a.email]));
 
     const exported = allAssignments
-      .map((a) => ({
-        email: emailMap.get(a.accountId) ?? null,
-        proxyId: a.proxyId,
-      }))
-      .filter((a): a is { email: string; proxyId: string } => a.email !== null);
+      .map((a) => {
+        const email = emailMap.get(a.accountId) ?? null;
+        if (email === null) return null;
+        return {
+          email,
+          proxyId: a.proxyId,
+          ...getResolvedAssignmentView(a.accountId),
+        };
+      })
+      .filter((a): a is {
+        email: string;
+        proxyId: string;
+        resolvedProxyId: string;
+        resolvedProxyName: string;
+      } => a !== null);
 
     return c.json({ assignments: exported });
   });

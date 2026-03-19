@@ -159,7 +159,19 @@ export function createAccountRoutes(
             const windowSec = usage.rate_limit.primary_window?.limit_window_seconds ?? null;
             pool.syncRateLimitWindow(acct.id, resetAt, windowSec);
 
-            const thresholds = getConfig().quota.warning_thresholds;
+            const config = getConfig();
+            if (config.quota.skip_exhausted) {
+              const primaryExhausted = quota.rate_limit.limit_reached;
+              const secondaryExhausted = quota.secondary_rate_limit?.limit_reached ?? false;
+              if (primaryExhausted || secondaryExhausted) {
+                const exhaustResetAt = primaryExhausted
+                  ? quota.rate_limit.reset_at
+                  : quota.secondary_rate_limit?.reset_at ?? null;
+                pool.markQuotaExhausted(acct.id, exhaustResetAt);
+              }
+            }
+
+            const thresholds = config.quota.warning_thresholds;
             const warnings = [];
             const primaryWarning = evaluateThresholds(
               acct.id,
@@ -246,6 +258,7 @@ export function createAccountRoutes(
       return c.json({ error: "Account not found" });
     }
     cookieJar?.clear(id);
+    proxyPool?.unassign(id);
     clearWarnings(id);
     return c.json({ success: true });
   });
