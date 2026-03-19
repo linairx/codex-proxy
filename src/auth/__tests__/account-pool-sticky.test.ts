@@ -202,4 +202,75 @@ describe("account-pool sticky strategy", () => {
     expect(acquired!.entryId).toBe(idB);
     pool.release(acquired!.entryId);
   });
+
+  it("diagnoseAcquire reports selected and skipped reasons without side effects", () => {
+    mockStrategy = "least_used";
+    profileForToken = {
+      "tok-selected": { chatgpt_plan_type: "team", email: "selected@test.com" },
+      "tok-free": { chatgpt_plan_type: "free", email: "free@test.com" },
+      "tok-disabled": { chatgpt_plan_type: "team", email: "disabled@test.com" },
+      "tok-rate": { chatgpt_plan_type: "team", email: "rate@test.com" },
+    };
+    mockGetModelPlanTypes.mockReturnValue(["team"]);
+
+    const pool = new AccountPool();
+    const selectedId = pool.addAccount("tok-selected");
+    const freeId = pool.addAccount("tok-free");
+    const disabledId = pool.addAccount("tok-disabled");
+    const rateLimitedId = pool.addAccount("tok-rate");
+
+    const selectedEntry = pool.getEntry(selectedId)!;
+    selectedEntry.usage.request_count = 1;
+
+    const freeEntry = pool.getEntry(freeId)!;
+    freeEntry.usage.request_count = 5;
+
+    pool.markStatus(disabledId, "disabled");
+    pool.markRateLimited(rateLimitedId, { retryAfterSec: 300 });
+
+    const diagnosis = pool.diagnoseAcquire({ model: "gpt-5.4" });
+
+    expect(diagnosis.model).toBe("gpt-5.4");
+    expect(diagnosis.selected).toEqual({ id: selectedId, status: "active" });
+    expect(diagnosis.candidates).toEqual(
+      expect.arrayContaining([
+        { id: selectedId, status: "active", eligible: true, reason: "selected" },
+        { id: freeId, status: "active", eligible: false, reason: "model_mismatch" },
+        { id: disabledId, status: "disabled", eligible: false, reason: "disabled" },
+        { id: rateLimitedId, status: "rate_limited", eligible: false, reason: "rate_limited" },
+      ]),
+    );
+    expect(pool.getEntry(selectedId)?.usage.request_count).toBe(1);
+    expect(pool.acquire()).not.toBeNull();
+  });
+
+  it("diagnoseAcquire marks eligible non-selected accounts as not_selected and never picks disabled", () => {
+    mockStrategy = "least_used";
+    profileForToken = {
+      "tok-a": { chatgpt_plan_type: "free", email: "a@test.com" },
+      "tok-b": { chatgpt_plan_type: "free", email: "b@test.com" },
+      "tok-disabled": { chatgpt_plan_type: "free", email: "disabled@test.com" },
+    };
+
+    const pool = new AccountPool();
+    const idA = pool.addAccount("tok-a");
+    const idB = pool.addAccount("tok-b");
+    const disabledId = pool.addAccount("tok-disabled");
+
+    pool.getEntry(idA)!.usage.request_count = 1;
+    pool.getEntry(idB)!.usage.request_count = 3;
+    pool.markStatus(disabledId, "disabled");
+
+    const diagnosis = pool.diagnoseAcquire();
+
+    expect(diagnosis.selected).toEqual({ id: idA, status: "active" });
+    expect(diagnosis.candidates).toEqual(
+      expect.arrayContaining([
+        { id: idA, status: "active", eligible: true, reason: "selected" },
+        { id: idB, status: "active", eligible: true, reason: "not_selected" },
+        { id: disabledId, status: "disabled", eligible: false, reason: "disabled" },
+      ]),
+    );
+    expect(pool.acquire()!.entryId).toBe(idA);
+  });
 });

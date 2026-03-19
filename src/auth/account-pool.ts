@@ -68,54 +68,185 @@ export class AccountPool {
    * @param options.excludeIds - Entry IDs to exclude (e.g. already tried)
    */
   acquire(options?: { model?: string; excludeIds?: string[] }): AcquiredAccount | null {
-    const now = new Date();
-    const nowMs = now.getTime();
+    const diagnosis = this.resolveAcquireSelection({
+      model: options?.model,
+      excludeIds: options?.excludeIds,
+      mutate: true,
+    });
+    const selected = diagnosis.selectedEntry;
+    if (!selected) return null;
 
-    // Update statuses before selecting
-    for (const entry of this.accounts.values()) {
-      this.refreshStatus(entry, now);
-    }
-
-    // P1-4: Auto-release stale locks (older than TTL)
-    for (const [id, lockedAt] of this.acquireLocks) {
-      if (nowMs - lockedAt > ACQUIRE_LOCK_TTL_MS) {
-        console.warn(`[AccountPool] Auto-releasing stale lock for ${id} (locked ${Math.round((nowMs - lockedAt) / 1000)}s ago)`);
-        this.acquireLocks.delete(id);
-      }
-    }
-
-    const excludeSet = new Set(options?.excludeIds ?? []);
-
-    // Filter available accounts
-    const available = [...this.accounts.values()].filter(
-      (a) => a.status === "active" && !this.acquireLocks.has(a.id) && !excludeSet.has(a.id),
-    );
-
-    if (available.length === 0) return null;
-
-    // Model-aware selection: prefer accounts whose planType matches the model's known plans
-    let candidates = available;
-    if (options?.model) {
-      const preferredPlans = getModelPlanTypes(options.model);
-      if (preferredPlans.length > 0) {
-        const planSet = new Set(preferredPlans);
-        const matched = available.filter((a) => a.planType && planSet.has(a.planType));
-        if (matched.length > 0) {
-          candidates = matched;
-        } else {
-          // No account matches the model's plan requirements — don't fallback to incompatible accounts
-          return null;
-        }
-      }
-    }
-
-    const selected = this.strategy.select(candidates, this.rotationState);
     this.acquireLocks.set(selected.id, Date.now());
     return {
       entryId: selected.id,
       token: selected.token,
       accountId: selected.accountId,
     };
+  }
+
+  diagnoseAcquire(options?: { model?: string }): {
+    model: string | null;
+    selected: { id: string; status: AccountEntry["status"] } | null;
+    candidates: Array<{
+      id: string;
+      status: AccountEntry["status"];
+      eligible: boolean;
+      reason:
+        | "selected"
+        | "disabled"
+        | "rate_limited"
+        | "expired"
+        | "refreshing"
+        | "model_mismatch"
+        | "locked"
+        | "not_selected";
+    }>;
+  } {
+    const diagnosis = this.resolveAcquireSelection({
+      model: options?.model,
+      mutate: false,
+    });
+
+    return {
+      model: options?.model ?? null,
+      selected: diagnosis.selectedEntry
+        ? { id: diagnosis.selectedEntry.id, status: diagnosis.selectedEntry.status }
+        : null,
+      candidates: diagnosis.entries.map((entry) => {
+        let eligible = false;
+        let reason:
+          | "selected"
+          | "disabled"
+          | "rate_limited"
+          | "expired"
+          | "refreshing"
+          | "model_mismatch"
+          | "locked"
+          | "not_selected";
+
+        if (entry.id === diagnosis.selectedEntry?.id) {
+          eligible = true;
+          reason = "selected";
+        } else if (entry.status === "disabled") {
+          reason = "disabled";
+        } else if (entry.status === "rate_limited") {
+          reason = "rate_limited";
+        } else if (entry.status === "expired") {
+          reason = "expired";
+        } else if (entry.status === "refreshing") {
+          reason = "refreshing";
+        } else if (diagnosis.lockedIds.has(entry.id)) {
+          reason = "locked";
+        } else if (diagnosis.modelMismatchIds.has(entry.id)) {
+          reason = "model_mismatch";
+        } else if (diagnosis.availableIds.has(entry.id)) {
+          eligible = true;
+          reason = "not_selected";
+        } else {
+          reason = "not_selected";
+        }
+
+        return {
+          id: entry.id,
+          status: entry.status,
+          eligible,
+          reason,
+        };
+      }),
+    };
+  }
+
+  private resolveAcquireSelection(options?: {
+    model?: string;
+    excludeIds?: string[];
+    mutate?: boolean;
+  }): {
+    entries: AccountEntry[];
+    availableIds: Set<string>;
+    modelMismatchIds: Set<string>;
+    lockedIds: Set<string>;
+    selectedEntry: AccountEntry | null;
+  } {
+    const now = new Date();
+    const entries = [...this.accounts.values()].map((entry) => {
+      const target = options?.mutate ? entry : this.cloneEntry(entry);
+      this.refreshStatus(target, now, { schedulePersist: options?.mutate ?? false });
+      return target;
+    });
+
+    const lockedIds = this.pruneStaleAcquireLocks(now.getTime(), options?.mutate ?? false);
+    const excludeSet = new Set(options?.excludeIds ?? []);
+
+    const available = entries.filter(
+      (entry) => entry.status === "active" && !lockedIds.has(entry.id) && !excludeSet.has(entry.id),
+    );
+
+    const availableIds = new Set(available.map((entry) => entry.id));
+    if (available.length === 0) {
+      return {
+        entries,
+        availableIds,
+        modelMismatchIds: new Set(),
+        lockedIds,
+        selectedEntry: null,
+      };
+    }
+
+    let candidates = available;
+    const modelMismatchIds = new Set<string>();
+    if (options?.model) {
+      const preferredPlans = getModelPlanTypes(options.model);
+      if (preferredPlans.length > 0) {
+        const planSet = new Set(preferredPlans);
+        const matched = available.filter((entry) => entry.planType && planSet.has(entry.planType));
+        for (const entry of available) {
+          if (!(entry.planType && planSet.has(entry.planType))) {
+            modelMismatchIds.add(entry.id);
+          }
+        }
+        if (matched.length > 0) {
+          candidates = matched;
+        } else {
+          return {
+            entries,
+            availableIds,
+            modelMismatchIds,
+            lockedIds,
+            selectedEntry: null,
+          };
+        }
+      }
+    }
+
+    return {
+      entries,
+      availableIds,
+      modelMismatchIds,
+      lockedIds,
+      selectedEntry: this.strategy.select(candidates, this.rotationState),
+    };
+  }
+
+  private cloneEntry(entry: AccountEntry): AccountEntry {
+    return {
+      ...entry,
+      usage: { ...entry.usage },
+    };
+  }
+
+  private pruneStaleAcquireLocks(nowMs: number, mutate: boolean): Set<string> {
+    const lockedIds = new Set<string>();
+    for (const [id, lockedAt] of this.acquireLocks) {
+      if (nowMs - lockedAt > ACQUIRE_LOCK_TTL_MS) {
+        if (mutate) {
+          console.warn(`[AccountPool] Auto-releasing stale lock for ${id} (locked ${Math.round((nowMs - lockedAt) / 1000)}s ago)`);
+          this.acquireLocks.delete(id);
+        }
+        continue;
+      }
+      lockedIds.add(id);
+    }
+    return lockedIds;
   }
 
   /**
@@ -517,7 +648,7 @@ export class AccountPool {
 
   // ── Internal ────────────────────────────────────────────────────
 
-  private refreshStatus(entry: AccountEntry, now: Date): void {
+  private refreshStatus(entry: AccountEntry, now: Date, options?: { schedulePersist?: boolean }): void {
     // Auto-recover rate-limited accounts
     if (entry.status === "rate_limited" && entry.usage.rate_limit_until) {
       if (now >= new Date(entry.usage.rate_limit_until)) {
@@ -549,7 +680,9 @@ export class AccountPool {
       } else {
         entry.usage.window_reset_at = null; // Wait for backend sync to correct
       }
-      this.schedulePersist();
+      if (options?.schedulePersist ?? true) {
+        this.schedulePersist();
+      }
     }
   }
 
