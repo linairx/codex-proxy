@@ -8,6 +8,9 @@
 
 ### Fixed
 
+- 额度耗尽账号仍显示「活跃」并接收请求的问题（#115）
+  - `markQuotaExhausted()` 现在可以覆盖 `rate_limited` 状态（仅延长，不缩短 reset 时间）
+  - 后台额度刷新现在同时检查 `rate_limited` 账号，防止因 429 短暂 backoff 导致漏检
 - `/v1/responses` 不再强制要求 `instructions` 字段，未传时默认空字符串（#71）
   - 修复 Cherry 等第三方客户端不传 `instructions` 时返回 400 的兼容性问题
 - CI 构建修复：WebSocket 传输 `instructions` 类型不匹配（TS2322）导致 Electron/Docker 编译失败

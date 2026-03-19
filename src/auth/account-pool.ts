@@ -320,12 +320,20 @@ export class AccountPool {
   markQuotaExhausted(entryId: string, resetAtUnix: number | null): void {
     const entry = this.accounts.get(entryId);
     if (!entry) return;
-    // Only mark if currently active — don't override other states
-    if (entry.status !== "active") return;
+    // Don't override disabled or expired states
+    if (entry.status === "disabled" || entry.status === "expired") return;
 
     const until = resetAtUnix
       ? new Date(resetAtUnix * 1000).toISOString()
       : new Date(Date.now() + 300_000).toISOString(); // fallback 5 min
+
+    // Only extend rate_limit_until, never shorten it
+    if (entry.status === "rate_limited" && entry.usage.rate_limit_until) {
+      const existing = new Date(entry.usage.rate_limit_until).getTime();
+      const proposed = new Date(until).getTime();
+      if (proposed <= existing) return;
+    }
+
     entry.status = "rate_limited";
     entry.usage.rate_limit_until = until;
     this.acquireLocks.delete(entryId);

@@ -35,13 +35,13 @@ async function fetchQuotaForAllAccounts(
 ): Promise<void> {
   if (!pool.isAuthenticated()) return;
 
-  const entries = pool.getAllEntries().filter((e) => e.status === "active");
+  const entries = pool.getAllEntries().filter((e) => e.status === "active" || e.status === "rate_limited");
   if (entries.length === 0) return;
 
   const config = getConfig();
   const thresholds = config.quota.warning_thresholds;
 
-  console.log(`[QuotaRefresh] Refreshing quota for ${entries.length} active account(s)`);
+  console.log(`[QuotaRefresh] Refreshing quota for ${entries.length} active/rate-limited account(s)`);
 
   const results = await Promise.allSettled(
     entries.map(async (entry) => {

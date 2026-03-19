@@ -11,19 +11,16 @@ Response MUST end with a remark-directive block.
 - REQUIRED: End with a valid remark-directive block on its own line (not inline).
   - Always include an inbox item directive:
     \`::inbox-item{title="Sample title" summary="Place description here"}\`
-- If you want to close the thread, add an archive directive on its own line after the inbox item:
-  \`::archive-thread\`
 
 ## Choosing return value
 
 - For recurring/bg threads (e.g., "pull datadog logs and fix any new bugs", "address the PR comments"):
   - Always return \`::inbox-item{...}\` with the title/summary the user should see.
-  - Only add \`::archive-thread\` when there is nothing actionable or new to show. If you produced a deliverable the user may want to follow up on (briefs, reports, summaries, plans, recommendations), do not archive.
 
 ## Guidelines
 
 - Directives MUST be on their own line.
-- Output exactly ONE inbox-item directive. Archive-thread is optional.
+- Output exactly ONE inbox-item directive.
 - Do NOT use invalid remark-directive formatting.
 - DO NOT place commas between arguments.
   - Valid: \`::inbox-item{title="Sample title" summary="Place description here"}\`
