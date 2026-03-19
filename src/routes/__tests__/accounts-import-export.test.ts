@@ -40,7 +40,7 @@ vi.mock("../../auth/jwt-utils.js", () => ({
     email: `${token.slice(0, 4)}@test.com`,
     chatgpt_plan_type: "free",
   })),
-  isTokenExpired: mockIsTokenExpired,
+  isTokenExpired: (...args: Parameters<typeof mockIsTokenExpired>) => mockIsTokenExpired(...args),
 }));
 
 const mockValidateManualToken = vi.fn((token: string) => (
@@ -49,7 +49,7 @@ const mockValidateManualToken = vi.fn((token: string) => (
     : { valid: true }
 ));
 vi.mock("../../auth/chatgpt-oauth.js", () => ({
-  validateManualToken: mockValidateManualToken,
+  validateManualToken: (...args: Parameters<typeof mockValidateManualToken>) => mockValidateManualToken(...args),
 }));
 
 vi.mock("../../utils/jitter.js", () => ({
@@ -226,6 +226,38 @@ describe("account import/export", () => {
     // Verify refreshToken was passed
     const entries = pool.getAllEntries();
     expect(entries[0].refreshToken).toBe("refresh_abc");
+  });
+
+  it("POST /auth/accounts/import keeps expired+refreshToken accounts on the refresh recovery path", async () => {
+    mockIsTokenExpired.mockImplementation((token: string) => token === "expiredRecoverToken123456");
+
+    const res = await app.request("/auth/accounts/import", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        accounts: [
+          { token: "expiredRecoverToken123456", refreshToken: "refresh_recover_abc" },
+        ],
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const data = await res.json() as { added: number; failed: number };
+    expect(data.added).toBe(1);
+    expect(data.failed).toBe(0);
+
+    const entries = pool.getAllEntries();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      token: "expiredRecoverToken123456",
+      refreshToken: "refresh_recover_abc",
+      status: "expired",
+    });
+
+    expect(mockScheduler.scheduleOne).toHaveBeenCalledWith(
+      entries[0].id,
+      "expiredRecoverToken123456",
+    );
   });
 
   it("POST /auth/accounts/import rejects empty accounts array", async () => {
