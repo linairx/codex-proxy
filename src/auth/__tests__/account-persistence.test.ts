@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { AccountEntry, AccountsFile } from "../types.js";
 
-let mockFs: {
+var mockFs: {
   existsSync: ReturnType<typeof vi.fn>;
   readFileSync: ReturnType<typeof vi.fn>;
   writeFileSync: ReturnType<typeof vi.fn>;
