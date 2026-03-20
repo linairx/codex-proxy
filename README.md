@@ -481,6 +481,10 @@ server:
 - 模型响应中自动过滤 Codex Desktop 指令
 <!-- CHANGELOG:END -->
 
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=icebear0828/codex-proxy&type=Date)](https://star-history.com/#icebear0828/codex-proxy&Date)
+
 ## 📄 许可协议 (License)
 
 本项目采用 **非商业许可 (Non-Commercial)**：

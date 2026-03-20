@@ -37,10 +37,11 @@ EXPOSE 8080
 RUN mkdir -p /app/data
 
 COPY docker-entrypoint.sh /
-RUN chmod +x /docker-entrypoint.sh
+COPY docker-healthcheck.sh /
+RUN chmod +x /docker-entrypoint.sh /docker-healthcheck.sh
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-  CMD curl -fs http://localhost:8080/health || exit 1
+  CMD /docker-healthcheck.sh
 
 ENTRYPOINT ["/docker-entrypoint.sh"]
 CMD ["node", "dist/index.js"]
