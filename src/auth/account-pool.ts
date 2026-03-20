@@ -371,11 +371,15 @@ export class AccountPool {
   addAccount(token: string, refreshToken?: string | null): string {
     const accountId = extractChatGptAccountId(token);
     const profile = extractUserProfile(token);
+    const userId = profile?.chatgpt_user_id ?? null;
 
-    // Deduplicate by accountId
+    // Deduplicate by accountId + userId (team members share accountId but have distinct userId)
     if (accountId) {
       for (const existing of this.accounts.values()) {
-        if (existing.accountId === accountId) {
+        if (
+          existing.accountId === accountId &&
+          existing.userId === userId
+        ) {
           // Update the existing entry's token
           existing.token = token;
           if (refreshToken !== undefined) {
@@ -397,6 +401,7 @@ export class AccountPool {
       refreshToken: refreshToken ?? null,
       email: profile?.email ?? null,
       accountId,
+      userId,
       planType: profile?.chatgpt_plan_type ?? null,
       proxyApiKey: "codex-proxy-" + randomBytes(24).toString("hex"),
       status: isTokenExpired(token) ? "expired" : "active",
@@ -493,6 +498,7 @@ export class AccountPool {
     entry.email = profile?.email ?? entry.email;
     entry.planType = profile?.chatgpt_plan_type ?? entry.planType;
     entry.accountId = extractChatGptAccountId(newToken) ?? entry.accountId;
+    entry.userId = profile?.chatgpt_user_id ?? entry.userId;
     entry.status = "active";
     this.persistNow(); // Critical data — persist immediately
   }
@@ -701,6 +707,7 @@ export class AccountPool {
       id: entry.id,
       email: entry.email,
       accountId: entry.accountId,
+      userId: entry.userId,
       planType: entry.planType,
       status: entry.status,
       usage: { ...entry.usage },
