@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- 新模型（如 `gpt-5.4-mini`）无法被动态发现的问题
+  - 移除 `isCodexCompatibleId()` 白名单过滤，信任后端 `/codex/models` 返回
 - 同一 Team 的多个账号因共享 `chatgpt_account_id` 只能添加一个的问题（#126）
   - 去重逻辑改为 `accountId + userId` 组合键，Team 成员各自保留独立条目
   - `AccountEntry` 新增 `userId` 字段，持久化层自动回填

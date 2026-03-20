@@ -140,33 +140,19 @@ function normalizeBackendModel(raw: BackendModelEntry): NormalizedModelWithMeta 
   };
 }
 
-/** Check if a model ID is Codex-compatible (gpt-X.Y-codex-*, bare gpt-X.Y, or gpt-oss-*). */
-function isCodexCompatibleId(id: string): boolean {
-  if (/^gpt-\d+(\.\d+)?-codex/.test(id)) return true;
-  if (/^gpt-\d+(\.\d+)?$/.test(id)) return true;
-  if (/^gpt-oss-/.test(id)) return true;
-  return false;
-}
-
 /**
  * Merge backend models into the catalog.
  *
  * Strategy:
+ *   - Trust backend: all models returned by the backend are accepted
+ *     (primary endpoint /codex/models only returns Codex-compatible models)
  *   - Backend models overwrite static models with the same ID
  *     (but YAML fields fill in missing backend fields)
  *   - Static-only models are preserved (YAML may know about models the backend doesn't list)
- *   - New Codex models from backend are auto-admitted (prevents missing new releases)
  *   - Aliases are never touched (always from YAML)
  */
 export function applyBackendModels(backendModels: BackendModelEntry[]): void {
-  // Keep models that either exist in static catalog OR are Codex models.
-  // This prevents ChatGPT-only slugs (gpt-5-2, research, etc.) from
-  // entering the catalog, while auto-admitting new Codex releases.
-  const staticIds = new Set(_catalog.map((m) => m.id));
-  const filtered = backendModels.filter((raw) => {
-    const id = raw.slug ?? raw.id ?? raw.name ?? "";
-    return staticIds.has(id) || isCodexCompatibleId(id);
-  });
+  const filtered = backendModels;
 
   const staticMap = new Map(_catalog.map((m) => [m.id, m]));
   const merged: CodexModelInfo[] = [];
@@ -206,9 +192,8 @@ export function applyBackendModels(backendModels: BackendModelEntry[]): void {
 
   _catalog = merged;
   _lastFetchTime = new Date().toISOString();
-  const skipped = backendModels.length - filtered.length;
   console.log(
-    `[ModelStore] Merged ${filtered.length} backend (${skipped} non-codex skipped) + ${merged.length - filtered.length} static-only = ${merged.length} total models`,
+    `[ModelStore] Merged ${filtered.length} backend + ${merged.length - filtered.length} static-only = ${merged.length} total models`,
   );
 
   // Auto-sync merged catalog back to models.yaml
@@ -261,12 +246,9 @@ export function applyBackendModelsForPlan(planType: string, backendModels: Backe
 
   // Build new model set for this plan and replace atomically
   const admittedIds = new Set<string>();
-  const catalogIds = new Set(_catalog.map((m) => m.id));
   for (const raw of backendModels) {
     const id = raw.slug ?? raw.id ?? raw.name ?? "";
-    if (catalogIds.has(id) || isCodexCompatibleId(id)) {
-      admittedIds.add(id);
-    }
+    if (id) admittedIds.add(id);
   }
   _planModelMap.set(planType, admittedIds);
 
