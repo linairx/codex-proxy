@@ -190,22 +190,49 @@ curl http://localhost:8080/v1/chat/completions \
 
 ## 🔗 Client Setup
 
-### Claude Code
+> Get your API Key from the dashboard (`http://localhost:8080`). Use `codex` (default gpt-5.2-codex) or any [model ID](#-available-models) as the model name.
+
+### Claude Code (CLI)
 
 ```bash
 export ANTHROPIC_BASE_URL=http://localhost:8080
 export ANTHROPIC_API_KEY=your-api-key
-# Default: gpt-5.2-codex. Switch: export ANTHROPIC_MODEL=codex-fast / gpt-5.4 / ...
+# Switch model: export ANTHROPIC_MODEL=codex-fast / gpt-5.4 / gpt-5.1-codex-mini ...
 claude
 ```
 
 > Copy env vars from the **Anthropic SDK Setup** card in the dashboard.
 
+### Claude for VSCode / JetBrains
+
+Open Claude extension settings → **API Configuration**:
+- **API Provider**: Anthropic
+- **Base URL**: `http://localhost:8080`
+- **API Key**: your API key
+
 ### Cursor
 
-Settings → Models → OpenAI API Base: `http://localhost:8080/v1`. API Key from dashboard.
+1. Settings → Models → OpenAI API
+2. **Base URL**: `http://localhost:8080/v1`
+3. **API Key**: your API key
+4. Add model `codex`
 
-### Continue (VS Code)
+### Windsurf
+
+1. Settings → AI Provider → **OpenAI Compatible**
+2. **API Base URL**: `http://localhost:8080/v1`
+3. **API Key**: your API key
+4. **Model**: `codex`
+
+### Cline (VSCode Extension)
+
+1. Cline sidebar → gear icon
+2. **API Provider**: OpenAI Compatible
+3. **Base URL**: `http://localhost:8080/v1`
+4. **API Key**: your API key
+5. **Model ID**: `codex`
+
+### Continue (VSCode Extension)
 
 `~/.continue/config.json`:
 ```json
@@ -220,10 +247,32 @@ Settings → Models → OpenAI API Base: `http://localhost:8080/v1`. API Key fro
 }
 ```
 
-### OpenAI SDK
+### aider
+
+```bash
+aider --openai-api-base http://localhost:8080/v1 \
+      --openai-api-key your-api-key \
+      --model openai/codex
+```
+
+### Cherry Studio
+
+1. Settings → Model Services → Add
+2. **Type**: OpenAI
+3. **API URL**: `http://localhost:8080/v1`
+4. **API Key**: your API key
+5. Add model `codex`
+
+### Any OpenAI-Compatible Client
+
+| Setting | Value |
+|---------|-------|
+| Base URL | `http://localhost:8080/v1` |
+| API Key | from dashboard |
+| Model | `codex` (or any model ID) |
 
 <details>
-<summary>Python / Node.js examples</summary>
+<summary>SDK examples (Python / Node.js)</summary>
 
 **Python**
 ```python
