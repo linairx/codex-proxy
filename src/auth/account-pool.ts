@@ -12,7 +12,7 @@ import {
   extractUserProfile,
   isTokenExpired,
 } from "./jwt-utils.js";
-import { getModelPlanTypes } from "../models/model-store.js";
+import { getModelPlanTypes, isPlanFetched } from "../models/model-store.js";
 import { getRotationStrategy } from "./rotation-strategy.js";
 import { createFsPersistence } from "./account-persistence.js";
 import type { AccountPersistence } from "./account-persistence.js";
@@ -198,9 +198,20 @@ export class AccountPool {
       const preferredPlans = getModelPlanTypes(options.model);
       if (preferredPlans.length > 0) {
         const planSet = new Set(preferredPlans);
-        const matched = available.filter((entry) => entry.planType && planSet.has(entry.planType));
+        const matched = available.filter((entry) => {
+          if (!entry.planType) return false;
+          if (planSet.has(entry.planType)) return true;
+          return !isPlanFetched(entry.planType);
+        });
         for (const entry of available) {
-          if (!(entry.planType && planSet.has(entry.planType))) {
+          if (!entry.planType) {
+            modelMismatchIds.add(entry.id);
+            continue;
+          }
+          if (planSet.has(entry.planType)) {
+            continue;
+          }
+          if (isPlanFetched(entry.planType)) {
             modelMismatchIds.add(entry.id);
           }
         }
@@ -371,12 +382,13 @@ export class AccountPool {
   addAccount(token: string, refreshToken?: string | null): string {
     const accountId = extractChatGptAccountId(token);
     const profile = extractUserProfile(token);
+    const userId = profile?.chatgpt_user_id ?? null;
 
-    // Deduplicate by accountId
-    if (accountId) {
-      for (const existing of this.accounts.values()) {
-        if (existing.accountId === accountId) {
-          // Update the existing entry's token
+    // Deduplicate by accountId + userId (team members share accountId but have distinct userId)
+    // Fallback: if accountId is missing, deduplicate by token to prevent unbounded growth
+    for (const existing of this.accounts.values()) {
+      if (accountId) {
+        if (existing.accountId === accountId && existing.userId === userId) {
           existing.token = token;
           if (refreshToken !== undefined) {
             existing.refreshToken = refreshToken ?? null;
@@ -384,9 +396,12 @@ export class AccountPool {
           existing.email = profile?.email ?? existing.email;
           existing.planType = profile?.chatgpt_plan_type ?? existing.planType;
           existing.status = isTokenExpired(token) ? "expired" : "active";
-          this.persistNow(); // Critical data — persist immediately
+          this.persistNow();
           return existing.id;
         }
+      } else if (existing.token === token) {
+        // Same token without accountId — already exists, skip
+        return existing.id;
       }
     }
 
@@ -397,6 +412,7 @@ export class AccountPool {
       refreshToken: refreshToken ?? null,
       email: profile?.email ?? null,
       accountId,
+      userId,
       planType: profile?.chatgpt_plan_type ?? null,
       proxyApiKey: "codex-proxy-" + randomBytes(24).toString("hex"),
       status: isTokenExpired(token) ? "expired" : "active",
@@ -451,12 +467,20 @@ export class AccountPool {
   markQuotaExhausted(entryId: string, resetAtUnix: number | null): void {
     const entry = this.accounts.get(entryId);
     if (!entry) return;
-    // Only mark if currently active — don't override other states
-    if (entry.status !== "active") return;
+    // Don't override disabled, expired, or banned states
+    if (entry.status === "disabled" || entry.status === "expired" || entry.status === "banned") return;
 
     const until = resetAtUnix
       ? new Date(resetAtUnix * 1000).toISOString()
       : new Date(Date.now() + 300_000).toISOString(); // fallback 5 min
+
+    // Only extend rate_limit_until, never shorten it
+    if (entry.status === "rate_limited" && entry.usage.rate_limit_until) {
+      const existing = new Date(entry.usage.rate_limit_until).getTime();
+      const proposed = new Date(until).getTime();
+      if (proposed <= existing) return;
+    }
+
     entry.status = "rate_limited";
     entry.usage.rate_limit_until = until;
     this.acquireLocks.delete(entryId);
@@ -485,14 +509,26 @@ export class AccountPool {
     entry.email = profile?.email ?? entry.email;
     entry.planType = profile?.chatgpt_plan_type ?? entry.planType;
     entry.accountId = extractChatGptAccountId(newToken) ?? entry.accountId;
+    entry.userId = profile?.chatgpt_user_id ?? entry.userId;
     entry.status = "active";
     this.persistNow(); // Critical data — persist immediately
   }
 
   markStatus(entryId: string, status: AccountEntry["status"]): void {
+    this.acquireLocks.delete(entryId);
     const entry = this.accounts.get(entryId);
     if (!entry) return;
     entry.status = status;
+    this.schedulePersist();
+  }
+
+  /** Clear rate_limited status and rate_limit_until (quota refresher confirms recovery). */
+  clearRateLimit(entryId: string): void {
+    const entry = this.accounts.get(entryId);
+    if (!entry) return;
+    entry.status = "active";
+    entry.usage.rate_limit_until = null;
+    this.acquireLocks.delete(entryId);
     this.schedulePersist();
   }
 
@@ -623,9 +659,10 @@ export class AccountPool {
     rate_limited: number;
     refreshing: number;
     disabled: number;
+    banned: number;
   } {
     const now = new Date();
-    let active = 0, expired = 0, rate_limited = 0, refreshing = 0, disabled = 0;
+    let active = 0, expired = 0, rate_limited = 0, refreshing = 0, disabled = 0, banned = 0;
     for (const entry of this.accounts.values()) {
       this.refreshStatus(entry, now);
       switch (entry.status) {
@@ -634,6 +671,7 @@ export class AccountPool {
         case "rate_limited": rate_limited++; break;
         case "refreshing": refreshing++; break;
         case "disabled": disabled++; break;
+        case "banned": banned++; break;
       }
     }
     return {
@@ -643,6 +681,7 @@ export class AccountPool {
       rate_limited,
       refreshing,
       disabled,
+      banned,
     };
   }
 
@@ -693,6 +732,7 @@ export class AccountPool {
       id: entry.id,
       email: entry.email,
       accountId: entry.accountId,
+      userId: entry.userId,
       planType: entry.planType,
       status: entry.status,
       usage: { ...entry.usage },

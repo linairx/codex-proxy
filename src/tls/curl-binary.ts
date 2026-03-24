@@ -13,6 +13,7 @@
 import { existsSync } from "fs";
 import { execFileSync } from "child_process";
 import { createConnection } from "net";
+import { lookup } from "dns/promises";
 import { resolve } from "path";
 import { getConfig } from "../config.js";
 import { getBinDir } from "../paths.js";
@@ -21,10 +22,13 @@ const IS_WIN = process.platform === "win32";
 const BINARY_NAME = IS_WIN ? "curl-impersonate.exe" : "curl-impersonate";
 
 /**
- * Chrome 136 TLS profile parameters.
- * Extracted from curl_chrome136 wrapper (lexiforest/curl-impersonate v1.4.4).
+ * Chrome 136 TLS profile parameters (fallback when --impersonate is unavailable).
+ * Extracted from curl_chrome136 wrapper (lexiforest/curl-impersonate).
  * These control TLS fingerprint, HTTP/2 framing, and protocol negotiation.
  * HTTP-level headers are NOT included — our fingerprint manager handles those.
+ *
+ * Preferred path: --impersonate chrome142 (v1.5.1+), which handles all of
+ * this automatically. This constant is only used as a manual fallback.
  */
 const CHROME_TLS_ARGS: string[] = [
   // ── TLS cipher suites (exact Chrome 136 order) ──
@@ -69,8 +73,12 @@ const CHROME_TLS_ARGS: string[] = [
 
 let _resolved: string | null = null;
 let _isImpersonate = false;
+let _supportsCompressed = true;
 let _tlsArgs: string[] | null = null;
 let _resolvedProfile = "chrome136";
+let _http11Fallback = false;
+let _http11FallbackUntil = 0; // epoch ms — fallback expires after this time
+const HTTP11_FALLBACK_TTL_MS = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Resolve the curl binary path. Result is cached after first call.
@@ -100,6 +108,18 @@ export function resolveCurlBinary(): string {
   // Fallback to system curl
   _resolved = "curl";
   _isImpersonate = false;
+
+  // Probe --compressed support (some minimal curl builds lack libz)
+  try {
+    execFileSync("curl", ["--compressed", "-s", "-o", "/dev/null", "data:,"], {
+      timeout: 3000,
+      stdio: "pipe",
+    });
+  } catch {
+    _supportsCompressed = false;
+    console.warn("[TLS] System curl lacks --compressed support. Consider running \"npm run setup\" to install curl-impersonate.");
+  }
+
   console.warn(
     `[TLS] curl-impersonate not found at ${binPath}. ` +
     `Falling back to system curl. Run "npm/pnpm/bun run setup" to install curl-impersonate.`,
@@ -112,7 +132,7 @@ export function resolveCurlBinary(): string {
  * Only these versions are valid --impersonate targets.
  * Sorted ascending — update when curl-impersonate adds new profiles.
  */
-const KNOWN_CHROME_PROFILES = [99, 100, 101, 104, 107, 110, 116, 119, 120, 123, 124, 131, 136];
+const KNOWN_CHROME_PROFILES = [99, 100, 101, 104, 107, 110, 116, 119, 120, 123, 124, 131, 133, 136, 142];
 
 /**
  * Map a configured profile to the nearest known-supported version.
@@ -175,9 +195,14 @@ export function getChromeTlsArgs(): string[] {
     _tlsArgs = detectImpersonateSupport(_resolved!);
   }
   const args = [..._tlsArgs];
-  // Force HTTP/1.1 when configured (for proxies that don't support HTTP/2)
+  // Force HTTP/1.1 when configured or auto-detected as necessary
   const config = getConfig();
-  if (config.tls.force_http11) {
+  // Auto-expire H2 fallback after TTL
+  if (_http11Fallback && Date.now() >= _http11FallbackUntil) {
+    _http11Fallback = false;
+    console.log("[TLS] HTTP/1.1 fallback expired, retrying HTTP/2");
+  }
+  if (config.tls.force_http11 || _http11Fallback) {
     args.push("--http1.1");
   }
   return args;
@@ -226,7 +251,17 @@ async function detectLocalProxy(): Promise<string | null> {
   for (const host of PROXY_HOSTS) {
     for (const { port, proto } of PROXY_PORTS) {
       if (await probePort(host, port)) {
-        const url = `${proto}://${host}:${port}`;
+        // Resolve hostname to IP to avoid DNS issues in curl subprocess
+        // (e.g. host.docker.internal resolves via /etc/hosts in Node but
+        // curl-impersonate may not be able to resolve it)
+        let resolvedHost = host;
+        if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
+          try {
+            const { address } = await lookup(host);
+            resolvedHost = address;
+          } catch { /* use original hostname as fallback */ }
+        }
+        const url = `${proto}://${resolvedHost}:${port}`;
         console.log(`[Proxy] Auto-detected local proxy: ${url}`);
         return url;
       }
@@ -280,6 +315,15 @@ export function getResolvedProfile(): string {
 }
 
 /**
+ * Whether the resolved curl binary supports --compressed.
+ * Always true for curl-impersonate; probed at startup for system curl.
+ */
+export function supportsCompressed(): boolean {
+  resolveCurlBinary(); // ensure detection has run
+  return _supportsCompressed;
+}
+
+/**
  * Get the detected proxy URL (or null if no proxy).
  * Used by LibcurlFfiTransport which needs the URL directly (not CLI args).
  */
@@ -305,11 +349,44 @@ export function getCurlDiagnostics(): {
 }
 
 /**
+ * Check if a curl error indicates HTTP/2 incompatibility and enable fallback.
+ * Called by transport layer when curl fails. Returns true if fallback was activated.
+ *
+ * Fallback is temporary (TTL-based) — after expiry, H2 is retried automatically.
+ * Exit code 16 is curl's dedicated HTTP/2 error and triggers unconditionally.
+ * Other exit codes require H2-related keywords in stderr to avoid false positives.
+ */
+export function checkHttp2Fallback(stderr: string, exitCode: number | null): boolean {
+  if (_http11Fallback && Date.now() < _http11FallbackUntil) return false; // active fallback
+  if (exitCode === 0) return false;
+
+  const h2Patterns = /ALPN|HTTP\/2|nghttp2|h2 error|GOAWAY/i;
+  // Exit 16 = dedicated HTTP/2 framing error — always trigger
+  const isH2 = exitCode === 16 || h2Patterns.test(stderr);
+  if (!isH2) return false;
+
+  _http11Fallback = true;
+  _http11FallbackUntil = Date.now() + HTTP11_FALLBACK_TTL_MS;
+  console.warn("[TLS] HTTP/2 failure detected, falling back to HTTP/1.1 for 10 minutes");
+  return true;
+}
+
+/**
+ * Whether HTTP/1.1 fallback is currently active.
+ */
+export function isHttp11Fallback(): boolean {
+  return _http11Fallback;
+}
+
+/**
  * Reset the cached binary path (useful for testing).
  */
 export function resetCurlBinaryCache(): void {
   _resolved = null;
   _isImpersonate = false;
+  _supportsCompressed = true;
   _tlsArgs = null;
-  _resolvedProfile = "chrome136";
+  _resolvedProfile = "chrome142";
+  _http11Fallback = false;
+  _http11FallbackUntil = 0;
 }

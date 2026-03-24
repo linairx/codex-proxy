@@ -6,8 +6,88 @@
 
 ## [Unreleased]
 
+### Changed
+
+- TLS 指纹对齐：curl-impersonate 升级支持 chrome144 profile（v1.5.1），`KNOWN_CHROME_PROFILES` 新增 133/136/142/144
+- 默认协议从 HTTP/1.1 改为 HTTP/2，匹配真实 Codex Desktop 行为
+- 指纹版本同步至 v26.318.11754（build 1100）
+
+### Added
+
+- Dashboard「基础设置」面板：端口、上游代理、强制 HTTP/1.1 可在 UI 配置，保存到 `data/local.yaml`（更新不覆盖）
+- HTTP/2 自动降级：curl 因 H2 错误失败时自动切换 HTTP/1.1（TTL 10 分钟后重试 H2）
+  - exit code 16（H2 专属）无条件触发；其他 exit code 需 stderr 含 H2 关键词
+  - `force_http11` 配置仍可手动强制 HTTP/1.1
+
 ### Fixed
 
+- 配置 overlay 机制：Dashboard 设置写入 `data/local.yaml`（gitignored），不再修改 `config/default.yaml`
+  - `git pull` 不会覆盖用户自定义设置（proxy_api_key、rotation_strategy、quota 等）
+  - `config/default.yaml` 的 `proxy_api_key` 默认值改为 `null`（自动生成）
+
+### Fixed
+
+- 额度恢复后账号仍显示"已限速"（#162）
+  - usage-refresher 发现 `limit_reached: false` 时主动调用 `clearRateLimit()` 恢复 active 并清除 `rate_limit_until`
+- Anthropic `/v1/messages` 截图场景 400 报错：`tool_result.content` 不支持 image block
+  - Schema 放行 image block；翻译层将图片提取为紧随 `function_call_output` 的 user message（`input_image`）
+- 代理自动检测使用 `host.docker.internal` 主机名导致 curl 无法解析（#114）
+  - 探测成功后通过 DNS lookup 解析为 IP 地址，避免 curl subprocess DNS 解析失败
+- OAuth 登录失败后重试报 "Invalid or expired session"（#154）
+  - Session 改为 peek → exchange 成功 → delete 生命周期，exchange 失败时 session 保留可重试
+- `withDirectFallback` 未捕获 curl exit code 5（代理解析失败），不会 fallback 直连
+  - `isProxyNetworkError` 新增 `could not resolve proxy` 和 `curl exited with code 5` 匹配
+- curl error 61：fingerprint 的 `Accept-Encoding: br, zstd` 覆盖了 `--compressed` 自动协商，系统 curl 不支持 br/zstd 时解压失败
+  - curl-cli-transport 统一跳过 `Accept-Encoding` header，由 `--compressed` 按 curl 实际能力协商
+- 系统 curl 不支持 `--compressed` 时启动报错
+  - 启动时探测支持情况，不支持则跳过该 flag 并提示安装 curl-impersonate
+- 模型列表启动时不更新：token 刷新与 model fetch 存在竞态，初始 fetch 跳过后直接等 1 小时
+  - model-fetcher 改为 fast-retry（10s 间隔，最多 12 次），账号就绪后立即拉取
+  - `config/models.yaml` 补回 gpt-5.4/5.4-mini/5.3-codex（3/18 后端已恢复）
+
+### Added
+
+- Dashboard 登录门（#141）：当 `proxy_api_key` 已配置且请求来自非 localhost 时，需输入密码才能访问控制台
+  - Cookie-based session，TTL 由 `session.ttl_minutes` 控制（默认 60 分钟）
+  - `POST /auth/dashboard-login`、`POST /auth/dashboard-logout`、`GET /auth/dashboard-status` 端点
+  - API 路由（`/v1/*`）不受影响，Electron（localhost）自动跳过
+  - 简单防暴力：同 IP 5 次/60s 限制
+  - HTTPS 自动检测：反代 `X-Forwarded-Proto: https` 时 cookie 加 `Secure` flag
+  - 远程 session 禁止清空 `proxy_api_key`（防止误操作导致登录门失效）
+  - Header 显示条件性退出按钮
+- 账号封禁检测：上游返回非 Cloudflare 的 403 时自动标记为 `banned` 状态
+  - Dashboard 卡片/表格显示玫红色 `Banned`/`已封禁` 状态徽章
+  - 状态筛选下拉新增 `Banned` 选项
+  - 被封账号自动跳过（`acquire()` 仅选 active），请求时自动切换到其他账号
+  - 后台额度刷新周期性重试 banned 账号，成功即自动解封
+- 上游 401 token 吊销（"token has been invalidated"）自动标记过期并切换下一个账号
+  - 之前 401 直接透传给客户端，不标记也不重试
+- Usage Stats 页面（`#/usage-stats`）：累计 token 用量汇总 + 时间趋势图
+  - 后台每 5 分钟记录用量快照，保留 7 天历史
+  - `GET /admin/usage-stats/summary` 实时累计汇总
+  - `GET /admin/usage-stats/history?granularity=hourly|daily&hours=N` 时间序列增量
+  - 纯 SVG 折线图（input/output tokens + 请求数），无外部图表库
+  - 支持按小时/按天粒度，24h/3d/7d 时间范围切换
+- Account Management 页面（`#/account-management`）：批量删除、批量改状态（active/disabled）、导入导出
+  - `POST /auth/accounts/batch-delete` 和 `POST /auth/accounts/batch-status` 批量端点
+  - 状态摘要条可点击筛选，复用 AccountTable 选择/分页/Shift 多选
+
+### Fixed
+
+- 运行时缓存（模型目录同步、版本检测结果）直接写入 git 跟踪的 `config/` 文件，导致仓库频繁变脏
+  - `model-store` 的 `syncStaticModels()` 改写 `data/models-cache.yaml`（gitignored）
+  - `update-checker` 的 `applyVersionUpdate()` 改写 `data/version-state.json`（gitignored）
+  - `config/` 目录现在对运行时操作只读，仅 admin API 设置变更例外
+
+- Responses SSE 新事件（`response.output_item.added` with `item.type=message`、`response.content_part.added/done`）未被识别，导致 `[CodexEvents] Unknown event` 日志刷屏
+- 新模型（如 `gpt-5.4-mini`）无法被动态发现的问题
+  - 移除 `isCodexCompatibleId()` 白名单过滤，信任后端 `/codex/models` 返回
+- 同一 Team 的多个账号因共享 `chatgpt_account_id` 只能添加一个的问题（#126）
+  - 去重逻辑改为 `accountId + userId` 组合键，Team 成员各自保留独立条目
+  - `AccountEntry` 新增 `userId` 字段，持久化层自动回填
+- 额度耗尽账号仍显示「活跃」并接收请求的问题（#115）
+  - `markQuotaExhausted()` 现在可以覆盖 `rate_limited` 状态（仅延长，不缩短 reset 时间）
+  - 后台额度刷新现在同时检查 `rate_limited` 账号，防止因 429 短暂 backoff 导致漏检
 - `/v1/responses` 不再强制要求 `instructions` 字段，未传时默认空字符串（#71）
   - 修复 Cherry 等第三方客户端不传 `instructions` 时返回 400 的兼容性问题
 - CI 构建修复：WebSocket 传输 `instructions` 类型不匹配（TS2322）导致 Electron/Docker 编译失败

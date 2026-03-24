@@ -13,6 +13,7 @@ const mockGetModelPlanTypes = vi.fn<(id: string) => string[]>(() => []);
 
 vi.mock("../../models/model-store.js", () => ({
   getModelPlanTypes: (...args: unknown[]) => mockGetModelPlanTypes(args[0] as string),
+  isPlanFetched: () => true,
 }));
 
 vi.mock("../../config.js", () => ({

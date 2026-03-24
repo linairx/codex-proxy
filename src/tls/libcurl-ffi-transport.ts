@@ -12,7 +12,7 @@ import { resolve } from "path";
 import { existsSync } from "fs";
 import type { IKoffiLib, IKoffiCType, IKoffiRegisteredCallback, KoffiFunction } from "koffi";
 import type { TlsTransport, TlsTransportResponse } from "./transport.js";
-import { getProxyUrl, getResolvedProfile } from "./curl-binary.js";
+import { getProxyUrl, getResolvedProfile, checkHttp2Fallback, isHttp11Fallback } from "./curl-binary.js";
 import { getBinDir } from "../paths.js";
 import { getConfig } from "../config.js";
 
@@ -345,7 +345,9 @@ export class LibcurlFfiTransport implements TlsTransport {
           }
         } catch (err) {
           if (!resolved) {
-            reject(err instanceof Error ? err : new Error(String(err)));
+            const msg = err instanceof Error ? err.message : String(err);
+            checkHttp2Fallback(msg, null);
+            reject(err instanceof Error ? err : new Error(msg));
           }
         } finally {
           cleanup();
@@ -428,6 +430,8 @@ export class LibcurlFfiTransport implements TlsTransport {
     try {
       const result = await asyncCall(b.curl_easy_perform, easy);
       if (result !== 0) {
+        // result is CURLcode — 16 = HTTP2 error, check for fallback
+        checkHttp2Fallback("", result);
         throw new Error(`curl_easy_perform failed with code ${result}`);
       }
 
@@ -465,9 +469,9 @@ export class LibcurlFfiTransport implements TlsTransport {
     b.curl_easy_setopt_str(easy, CURLOPT_URL, url);
     b.curl_easy_setopt_long(easy, CURLOPT_NOSIGNAL, 1);
 
-    // HTTP version: use HTTP/1.1 when force_http11 is enabled (for proxies that don't support HTTP/2)
+    // HTTP version: use HTTP/1.1 when configured or auto-fallback active
     const config = getConfig();
-    const httpVersion = config.tls.force_http11 ? CURL_HTTP_VERSION_1_1 : CURL_HTTP_VERSION_2_0;
+    const httpVersion = (config.tls.force_http11 || isHttp11Fallback()) ? CURL_HTTP_VERSION_1_1 : CURL_HTTP_VERSION_2_0;
     b.curl_easy_setopt_long(easy, CURLOPT_HTTP_VERSION, httpVersion);
 
     // Accept-Encoding — let libcurl handle decompression

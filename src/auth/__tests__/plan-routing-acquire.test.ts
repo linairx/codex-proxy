@@ -8,11 +8,13 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-// Mock getModelPlanTypes to control plan routing
+// Mock getModelPlanTypes and isPlanFetched to control plan routing
 const mockGetModelPlanTypes = vi.fn<(id: string) => string[]>(() => []);
+const mockIsPlanFetched = vi.fn<(planType: string) => boolean>(() => true);
 
 vi.mock("../../models/model-store.js", () => ({
   getModelPlanTypes: (...args: unknown[]) => mockGetModelPlanTypes(args[0] as string),
+  isPlanFetched: (...args: unknown[]) => mockIsPlanFetched(args[0] as string),
 }));
 
 vi.mock("../../config.js", () => ({
@@ -39,6 +41,7 @@ vi.mock("../../utils/jitter.js", () => ({
 vi.mock("fs", () => ({
   readFileSync: vi.fn(() => JSON.stringify({ accounts: [] })),
   writeFileSync: vi.fn(),
+  renameSync: vi.fn(),
   existsSync: vi.fn(() => false),
   mkdirSync: vi.fn(),
 }));
@@ -138,5 +141,65 @@ describe("account-pool plan-based routing", () => {
     expect(acquired).not.toBeNull();
     // Both are valid candidates, should get one of them
     expect(["tok-free", "tok-team"]).toContain(acquired!.token);
+  });
+
+  it("includes accounts whose plan was never fetched (unfetched = possibly compatible)", () => {
+    // Model known to work on team, but free plan was never fetched
+    mockGetModelPlanTypes.mockReturnValue(["team"]);
+    mockIsPlanFetched.mockImplementation((plan: string) => plan === "team");
+
+    const pool = createPool(
+      { token: "tok-free", planType: "free", email: "free@test.com" },
+      { token: "tok-team", planType: "team", email: "team@test.com" },
+    );
+
+    // Both accounts are candidates (team is known, free is unfetched → possibly compatible)
+    const first = pool.acquire({ model: "gpt-5.4" });
+    expect(first).not.toBeNull();
+
+    // Second concurrent request should also succeed (two candidates available)
+    const second = pool.acquire({ model: "gpt-5.4" });
+    expect(second).not.toBeNull();
+    expect(second!.token).not.toBe(first!.token);
+
+    // Both tokens should be from our pool
+    const tokens = new Set([first!.token, second!.token]);
+    expect(tokens.has("tok-free")).toBe(true);
+    expect(tokens.has("tok-team")).toBe(true);
+  });
+
+  it("excludes accounts whose plan was fetched but lacks the model", () => {
+    // Model known to work on team; free plan was fetched and model is NOT in it
+    mockGetModelPlanTypes.mockReturnValue(["team"]);
+    mockIsPlanFetched.mockReturnValue(true); // both plans fetched
+
+    const pool = createPool(
+      { token: "tok-free", planType: "free", email: "free@test.com" },
+      { token: "tok-team", planType: "team", email: "team@test.com" },
+    );
+
+    // Lock the team account
+    const first = pool.acquire({ model: "gpt-5.4" });
+    expect(first).not.toBeNull();
+    expect(first!.token).toBe("tok-team");
+
+    // Second request — free plan was fetched and model is absent → null
+    const second = pool.acquire({ model: "gpt-5.4" });
+    expect(second).toBeNull();
+  });
+
+  it("unfetched plans are included even when model appears plan-locked", () => {
+    // Model supports team only, no plans have been fetched, but only free accounts exist
+    mockGetModelPlanTypes.mockReturnValue(["team"]);
+    mockIsPlanFetched.mockReturnValue(false); // no plans fetched yet
+
+    const pool = createPool(
+      { token: "tok-free", planType: "free", email: "free@test.com" },
+    );
+
+    // Free plan is unfetched → included as possibly compatible
+    const acquired = pool.acquire({ model: "gpt-5.4" });
+    expect(acquired).not.toBeNull();
+    expect(acquired!.token).toBe("tok-free");
   });
 });

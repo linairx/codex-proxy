@@ -27,15 +27,19 @@ const statusStyles: Record<string, [string, TranslationKey]> = {
     "bg-slate-100 text-slate-500 border-slate-200 dark:bg-slate-800/30 dark:text-slate-400 dark:border-slate-700/30",
     "disabled",
   ],
+  banned: [
+    "bg-rose-100 text-rose-700 border-rose-300 dark:bg-rose-900/30 dark:text-rose-400 dark:border-rose-800/40",
+    "banned",
+  ],
 };
 
 interface AccountTableProps {
   accounts: AssignmentAccount[];
-  proxies: ProxyEntry[];
+  proxies?: ProxyEntry[];
   selectedIds: Set<string>;
   onSelectionChange: (ids: Set<string>) => void;
-  onSingleProxyChange: (accountId: string, proxyId: string) => void;
-  filterGroup: string | null;
+  onSingleProxyChange?: (accountId: string, proxyId: string) => void;
+  filterGroup?: string | null;
   statusFilter: string;
   onStatusFilterChange: (status: string) => void;
 }
@@ -46,11 +50,12 @@ export function AccountTable({
   selectedIds,
   onSelectionChange,
   onSingleProxyChange,
-  filterGroup,
+  filterGroup = null,
   statusFilter,
   onStatusFilterChange,
 }: AccountTableProps) {
   const t = useT();
+  const showProxy = !!proxies;
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(0);
   const lastClickedIndex = useRef<number | null>(null);
@@ -159,6 +164,7 @@ export function AccountTable({
           <option value="active">{t("active")}</option>
           <option value="expired">{t("expired")}</option>
           <option value="rate_limited">{t("rateLimited")}</option>
+          <option value="banned">{t("banned")}</option>
           <option value="disabled">{t("disabled")}</option>
         </select>
       </div>
@@ -177,7 +183,7 @@ export function AccountTable({
           </label>
           <span class="flex-1 min-w-0">Email</span>
           <span class="w-20 text-center hidden sm:block">{t("statusFilter")}</span>
-          <span class="w-40 text-center hidden md:block">{t("proxyAssignment")}</span>
+          {showProxy && <span class="w-40 text-center hidden md:block">{t("proxyAssignment")}</span>}
         </div>
 
         {/* Rows */}
@@ -219,23 +225,25 @@ export function AccountTable({
                     {t(statusKey)}
                   </span>
                 </span>
-                <span class="w-40 hidden md:block" onClick={(e) => e.stopPropagation()}>
-                  <select
-                    value={acct.proxyId || "global"}
-                    onChange={(e) => onSingleProxyChange(acct.id, (e.target as HTMLSelectElement).value)}
-                    class="w-full text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-border-dark bg-white dark:bg-bg-dark text-slate-700 dark:text-text-main focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                  >
-                    <option value="global">{t("globalDefault")}</option>
-                    <option value="direct">{t("directNoProxy")}</option>
-                    <option value="auto">{t("autoRoundRobin")}</option>
-                    {proxies.map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                        {p.health?.exitIp ? ` (${p.health.exitIp})` : ""}
-                      </option>
-                    ))}
-                  </select>
-                </span>
+                {showProxy && (
+                  <span class="w-40 hidden md:block" onClick={(e) => e.stopPropagation()}>
+                    <select
+                      value={acct.proxyId || "global"}
+                      onChange={(e) => onSingleProxyChange?.(acct.id, (e.target as HTMLSelectElement).value)}
+                      class="w-full text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-border-dark bg-white dark:bg-bg-dark text-slate-700 dark:text-text-main focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+                    >
+                      <option value="global">{t("globalDefault")}</option>
+                      <option value="direct">{t("directNoProxy")}</option>
+                      <option value="auto">{t("autoRoundRobin")}</option>
+                      {proxies.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                          {p.health?.exitIp ? ` (${p.health.exitIp})` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </span>
+                )}
               </div>
             );
           })

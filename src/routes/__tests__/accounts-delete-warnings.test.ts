@@ -30,7 +30,9 @@ vi.mock("../../config.js", () => ({
   })),
 }));
 
-const mockIsTokenExpired = vi.fn(() => false);
+const { mockIsTokenExpired } = vi.hoisted(() => ({
+  mockIsTokenExpired: vi.fn(() => false),
+}));
 vi.mock("../../auth/jwt-utils.js", () => ({
   decodeJwtPayload: vi.fn(() => ({ exp: Math.floor(Date.now() / 1000) + 3600 })),
   extractChatGptAccountId: vi.fn((token: string) => `acct-${token.slice(0, 8)}`),
@@ -38,11 +40,16 @@ vi.mock("../../auth/jwt-utils.js", () => ({
     email: `${token.slice(0, 4)}@test.com`,
     chatgpt_plan_type: "free",
   })),
-  isTokenExpired: mockIsTokenExpired,
+  isTokenExpired: (...args: Parameters<typeof mockIsTokenExpired>) => mockIsTokenExpired(...args),
 }));
 
 vi.mock("../../utils/jitter.js", () => ({
   jitter: vi.fn((val: number) => val),
+}));
+
+vi.mock("../../models/model-store.js", () => ({
+  getModelPlanTypes: vi.fn(() => []),
+  isPlanFetched: vi.fn(() => true),
 }));
 
 import { Hono } from "hono";

@@ -55,6 +55,7 @@ vi.mock("../../utils/jitter.js", () => ({
 
 vi.mock("../../models/model-store.js", () => ({
   getModelPlanTypes: vi.fn(() => []),
+  isPlanFetched: vi.fn(() => true),
 }));
 
 import { AccountPool } from "../account-pool.js";
@@ -123,7 +124,7 @@ describe("AccountPool quota methods", () => {
       expect(entry?.usage.rate_limit_until).toBeTruthy();
     });
 
-    it("does not override non-active status", () => {
+    it("does not override disabled status", () => {
       const id = pool.addAccount("eyJhbGciOiJIUzI1NiJ9.test-token-ddd");
       pool.markStatus(id, "disabled");
 
@@ -131,6 +132,51 @@ describe("AccountPool quota methods", () => {
 
       const entry = pool.getEntry(id);
       expect(entry?.status).toBe("disabled"); // unchanged
+    });
+
+    it("does not override expired status", () => {
+      const id = pool.addAccount("eyJhbGciOiJIUzI1NiJ9.test-token-ddd2");
+      pool.markStatus(id, "expired");
+
+      pool.markQuotaExhausted(id, Math.floor(Date.now() / 1000) + 3600);
+
+      const entry = pool.getEntry(id);
+      expect(entry?.status).toBe("expired"); // unchanged
+    });
+
+    it("extends rate_limit_until on already rate_limited account", () => {
+      const id = pool.addAccount("eyJhbGciOiJIUzI1NiJ9.test-token-ddd3");
+      // Simulate 429 backoff (short)
+      pool.markRateLimited(id, { retryAfterSec: 60 });
+      const entryBefore = pool.getEntry(id);
+      expect(entryBefore?.status).toBe("rate_limited");
+      const shortUntil = new Date(entryBefore!.usage.rate_limit_until!).getTime();
+
+      // Quota refresh discovers exhaustion — much longer reset
+      const resetAt = Math.floor(Date.now() / 1000) + 7200; // 2 hours
+      pool.markQuotaExhausted(id, resetAt);
+
+      const entryAfter = pool.getEntry(id);
+      expect(entryAfter?.status).toBe("rate_limited");
+      const longUntil = new Date(entryAfter!.usage.rate_limit_until!).getTime();
+      expect(longUntil).toBeGreaterThan(shortUntil);
+    });
+
+    it("does not shorten existing rate_limit_until", () => {
+      const id = pool.addAccount("eyJhbGciOiJIUzI1NiJ9.test-token-ddd4");
+      // Mark with long reset (e.g. 7-day quota)
+      const longResetAt = Math.floor(Date.now() / 1000) + 86400; // 24 hours
+      pool.markQuotaExhausted(id, longResetAt);
+
+      const entryBefore = pool.getEntry(id);
+      const originalUntil = entryBefore!.usage.rate_limit_until;
+
+      // Try to mark with shorter reset (e.g. 5-hour quota)
+      const shortResetAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+      pool.markQuotaExhausted(id, shortResetAt);
+
+      const entryAfter = pool.getEntry(id);
+      expect(entryAfter!.usage.rate_limit_until).toBe(originalUntil); // unchanged
     });
   });
 

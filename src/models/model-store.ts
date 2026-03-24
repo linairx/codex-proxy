@@ -9,11 +9,11 @@
  * Aliases always come from YAML (user-customizable), never from backend.
  */
 
-import { readFileSync, writeFile } from "fs";
+import { readFileSync, writeFile, existsSync, mkdirSync } from "fs";
 import { resolve } from "path";
 import yaml from "js-yaml";
 import { getConfig } from "../config.js";
-import { getConfigDir } from "../paths.js";
+import { getConfigDir, getDataDir } from "../paths.js";
 
 export interface CodexModelInfo {
   id: string;
@@ -60,6 +60,30 @@ export function loadStaticModels(configDir?: string): void {
   _planModelMap = new Map(); // Reset plan maps on reload
   _modelPlanIndex = new Map();
   console.log(`[ModelStore] Loaded ${_catalog.length} static models, ${Object.keys(_aliases).length} aliases`);
+
+  // Overlay cached backend models from data/ (cold-start fallback)
+  try {
+    const cachePath = resolve(getDataDir(), "models-cache.yaml");
+    if (existsSync(cachePath)) {
+      const cached = yaml.load(readFileSync(cachePath, "utf-8")) as ModelsConfig;
+      const cachedModels = cached.models ?? [];
+      if (cachedModels.length > 0) {
+        const staticIds = new Set(_catalog.map((m) => m.id));
+        let added = 0;
+        for (const m of cachedModels) {
+          if (!staticIds.has(m.id)) {
+            _catalog.push({ ...m, source: "backend" as const });
+            added++;
+          }
+        }
+        if (added > 0) {
+          console.log(`[ModelStore] Overlaid ${added} cached backend models from data/models-cache.yaml`);
+        }
+      }
+    }
+  } catch {
+    // Cache missing or corrupt — safe to ignore, backend fetch will repopulate
+  }
 }
 
 // ── Backend merge ──────────────────────────────────────────────────
@@ -140,33 +164,19 @@ function normalizeBackendModel(raw: BackendModelEntry): NormalizedModelWithMeta 
   };
 }
 
-/** Check if a model ID is Codex-compatible (gpt-X.Y-codex-*, bare gpt-X.Y, or gpt-oss-*). */
-function isCodexCompatibleId(id: string): boolean {
-  if (/^gpt-\d+(\.\d+)?-codex/.test(id)) return true;
-  if (/^gpt-\d+(\.\d+)?$/.test(id)) return true;
-  if (/^gpt-oss-/.test(id)) return true;
-  return false;
-}
-
 /**
  * Merge backend models into the catalog.
  *
  * Strategy:
+ *   - Trust backend: all models returned by the backend are accepted
+ *     (primary endpoint /codex/models only returns Codex-compatible models)
  *   - Backend models overwrite static models with the same ID
  *     (but YAML fields fill in missing backend fields)
  *   - Static-only models are preserved (YAML may know about models the backend doesn't list)
- *   - New Codex models from backend are auto-admitted (prevents missing new releases)
  *   - Aliases are never touched (always from YAML)
  */
 export function applyBackendModels(backendModels: BackendModelEntry[]): void {
-  // Keep models that either exist in static catalog OR are Codex models.
-  // This prevents ChatGPT-only slugs (gpt-5-2, research, etc.) from
-  // entering the catalog, while auto-admitting new Codex releases.
-  const staticIds = new Set(_catalog.map((m) => m.id));
-  const filtered = backendModels.filter((raw) => {
-    const id = raw.slug ?? raw.id ?? raw.name ?? "";
-    return staticIds.has(id) || isCodexCompatibleId(id);
-  });
+  const filtered = backendModels;
 
   const staticMap = new Map(_catalog.map((m) => [m.id, m]));
   const merged: CodexModelInfo[] = [];
@@ -206,9 +216,8 @@ export function applyBackendModels(backendModels: BackendModelEntry[]): void {
 
   _catalog = merged;
   _lastFetchTime = new Date().toISOString();
-  const skipped = backendModels.length - filtered.length;
   console.log(
-    `[ModelStore] Merged ${filtered.length} backend (${skipped} non-codex skipped) + ${merged.length - filtered.length} static-only = ${merged.length} total models`,
+    `[ModelStore] Merged ${filtered.length} backend + ${merged.length - filtered.length} static-only = ${merged.length} total models`,
   );
 
   // Auto-sync merged catalog back to models.yaml
@@ -216,24 +225,26 @@ export function applyBackendModels(backendModels: BackendModelEntry[]): void {
 }
 
 /**
- * Write the current merged catalog back to config/models.yaml so it stays
- * up-to-date as a fallback for future cold starts.  Fire-and-forget.
+ * Write the current merged catalog to data/models-cache.yaml so it serves
+ * as a fallback for future cold starts.  Fire-and-forget.
+ *
+ * config/models.yaml stays read-only (git-tracked baseline).
  */
 function syncStaticModels(): void {
-  const configPath = resolve(getConfigDir(), "models.yaml");
+  const dataDir = getDataDir();
+  const cachePath = resolve(dataDir, "models-cache.yaml");
   const today = new Date().toISOString().slice(0, 10);
 
   // Strip internal `source` field before serializing
   const models = _catalog.map(({ source: _s, ...rest }) => rest);
 
   const header = [
-    "# Codex model catalog",
+    "# Codex model cache",
     "#",
-    "# Sources:",
-    "#   1. Static (below) — baseline for cold starts",
-    "#   2. Dynamic          — fetched from /backend-api/codex/models, auto-synced here",
+    "# Auto-synced by model-store from backend fetch results.",
+    "# This is a runtime cache — do NOT commit to git.",
     "#",
-    `# Last updated: ${today} (auto-synced by model-store)`,
+    `# Last updated: ${today}`,
     "",
   ].join("\n");
 
@@ -242,11 +253,17 @@ function syncStaticModels(): void {
     { lineWidth: 120, noRefs: true, sortKeys: false },
   );
 
-  writeFile(configPath, header + body, "utf-8", (err) => {
+  try {
+    mkdirSync(dataDir, { recursive: true });
+  } catch {
+    // already exists
+  }
+
+  writeFile(cachePath, header + body, "utf-8", (err) => {
     if (err) {
-      console.warn(`[ModelStore] Failed to sync models.yaml: ${err.message}`);
+      console.warn(`[ModelStore] Failed to sync models cache: ${err.message}`);
     } else {
-      console.log(`[ModelStore] Synced ${models.length} models to models.yaml`);
+      console.log(`[ModelStore] Synced ${models.length} models to data/models-cache.yaml`);
     }
   });
 }
@@ -261,12 +278,9 @@ export function applyBackendModelsForPlan(planType: string, backendModels: Backe
 
   // Build new model set for this plan and replace atomically
   const admittedIds = new Set<string>();
-  const catalogIds = new Set(_catalog.map((m) => m.id));
   for (const raw of backendModels) {
     const id = raw.slug ?? raw.id ?? raw.name ?? "";
-    if (catalogIds.has(id) || isCodexCompatibleId(id)) {
-      admittedIds.add(id);
-    }
+    if (id) admittedIds.add(id);
   }
   _planModelMap.set(planType, admittedIds);
 
@@ -292,6 +306,14 @@ export function applyBackendModelsForPlan(planType: string, backendModels: Backe
  */
 export function getModelPlanTypes(modelId: string): string[] {
   return [...(_modelPlanIndex.get(modelId) ?? [])];
+}
+
+/**
+ * Check if models have ever been successfully fetched for a given plan type.
+ * Returns false when the plan's model list is unknown (fetch failed or never attempted).
+ */
+export function isPlanFetched(planType: string): boolean {
+  return _planModelMap.has(planType);
 }
 
 // ── Model name suffix parsing ───────────────────────────────────────

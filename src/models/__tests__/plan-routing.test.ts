@@ -114,18 +114,18 @@ describe("plan-based model routing", () => {
     expect(getModelPlanTypes("nonexistent-model")).toEqual([]);
   });
 
-  it("non-Codex model slugs are filtered out", () => {
+  it("all backend model slugs are admitted (no client-side filtering)", () => {
     applyBackendModelsForPlan("free", [
       makeModel("gpt-5.2-codex"),
-      makeModel("research"),           // not Codex-compatible
-      makeModel("gpt-5-2"),            // hyphen instead of dot
-      makeModel("some-internal-slug"), // not Codex-compatible
+      makeModel("research"),
+      makeModel("gpt-5-2"),
+      makeModel("some-internal-slug"),
     ]);
 
     expect(getModelPlanTypes("gpt-5.2-codex")).toContain("free");
-    expect(getModelPlanTypes("research")).toEqual([]);
-    expect(getModelPlanTypes("gpt-5-2")).toEqual([]);
-    expect(getModelPlanTypes("some-internal-slug")).toEqual([]);
+    expect(getModelPlanTypes("research")).toContain("free");
+    expect(getModelPlanTypes("gpt-5-2")).toContain("free");
+    expect(getModelPlanTypes("some-internal-slug")).toContain("free");
   });
 
   it("gpt-oss-* models are admitted", () => {

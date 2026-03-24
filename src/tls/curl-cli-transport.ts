@@ -8,11 +8,19 @@
  */
 
 import { spawn, execFile } from "child_process";
-import { resolveCurlBinary, getChromeTlsArgs, getProxyArgs, isImpersonate as curlIsImpersonate } from "./curl-binary.js";
+import { resolveCurlBinary, getChromeTlsArgs, getProxyArgs, isImpersonate as curlIsImpersonate, supportsCompressed, checkHttp2Fallback } from "./curl-binary.js";
 import type { TlsTransport, TlsTransportResponse } from "./transport.js";
 
 const STATUS_SEPARATOR = "\n__CURL_HTTP_STATUS__";
 const HEADER_TIMEOUT_MS = 30_000;
+
+/** Push header args to curl, skipping Accept-Encoding so --compressed can auto-negotiate. */
+export function pushHeaderArgs(args: string[], headers: Record<string, string>): void {
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === "accept-encoding") continue;
+    args.push("-H", `${key}: ${value}`);
+  }
+}
 
 export class CurlCliTransport implements TlsTransport {
   /**
@@ -32,7 +40,7 @@ export class CurlCliTransport implements TlsTransport {
         ...getChromeTlsArgs(),
         ...resolveProxyArgs(proxyUrl),
         "-s", "-S",
-        "--compressed",
+        ...(supportsCompressed() ? ["--compressed"] : []),
         "-N",            // no output buffering (SSE)
         "-i",            // include response headers in stdout
         "-X", "POST",
@@ -43,9 +51,7 @@ export class CurlCliTransport implements TlsTransport {
         args.push("--max-time", String(timeoutSec));
       }
 
-      for (const [key, value] of Object.entries(headers)) {
-        args.push("-H", `${key}: ${value}`);
-      }
+      pushHeaderArgs(args, headers);
       // Suppress curl's auto Expect: 100-continue (Chromium never sends it)
       args.push("-H", "Expect:");
       args.push(url);
@@ -150,6 +156,7 @@ export class CurlCliTransport implements TlsTransport {
           signal.removeEventListener("abort", onAbort);
         }
         if (!headersParsed) {
+          checkHttp2Fallback(stderrBuf, code);
           reject(new Error(`curl exited with code ${code}: ${stderrBuf}`));
         } else if (code !== 0 && code !== null) {
           // curl died mid-stream (e.g. connection reset, SIGPIPE) — signal error to reader
@@ -184,13 +191,11 @@ export class CurlCliTransport implements TlsTransport {
       ...getChromeTlsArgs(),
       ...resolveProxyArgs(proxyUrl),
       "-s", "-S",
-      "--compressed",
+      ...(supportsCompressed() ? ["--compressed"] : []),
       "--max-time", String(timeoutSec),
     ];
 
-    for (const [key, value] of Object.entries(headers)) {
-      args.push("-H", `${key}: ${value}`);
-    }
+    pushHeaderArgs(args, headers);
     args.push("-H", "Expect:");
     args.push("-w", STATUS_SEPARATOR + "%{http_code}");
     args.push(url);
@@ -213,14 +218,12 @@ export class CurlCliTransport implements TlsTransport {
       ...getChromeTlsArgs(),
       ...resolveProxyArgs(proxyUrl),
       "-s", "-S",
-      "--compressed",
+      ...(supportsCompressed() ? ["--compressed"] : []),
       "--max-time", String(timeoutSec),
       "-X", "POST",
     ];
 
-    for (const [key, value] of Object.entries(headers)) {
-      args.push("-H", `${key}: ${value}`);
-    }
+    pushHeaderArgs(args, headers);
     args.push("-H", "Expect:");
     args.push("-d", body);
     args.push("-w", STATUS_SEPARATOR + "%{http_code}");
@@ -261,11 +264,13 @@ function execCurl(args: string[]): Promise<{ status: number; body: string }> {
       { maxBuffer: 2 * 1024 * 1024 },
       (err, stdout, stderr) => {
         if (err) {
-          const castErr = err as Error & { errno?: number };
+          const castErr = err as Error & { errno?: number; code?: string };
           // Check for EBADARCH first (architecture mismatch)
           if (castErr.errno === -86 || err.message.includes("-86")) {
             reject(new Error(formatSpawnError(castErr)));
           } else {
+            const exitCode = typeof castErr.code === "string" ? parseInt(castErr.code, 10) : null;
+            checkHttp2Fallback(stderr, Number.isNaN(exitCode) ? null : exitCode);
             reject(new Error(`curl failed: ${err.message} ${stderr}`));
           }
           return;

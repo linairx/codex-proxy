@@ -1,8 +1,8 @@
 import { Hono } from "hono";
-import { resolve } from "path";
-import { getConfig, reloadAllConfigs, ROTATION_STRATEGIES } from "../../config.js";
-import { getConfigDir } from "../../paths.js";
+import { getConnInfo } from "@hono/node-server/conninfo";
+import { getConfig, getLocalConfigPath, reloadAllConfigs, ROTATION_STRATEGIES } from "../../config.js";
 import { mutateYaml } from "../../utils/yaml-mutate.js";
+import { isLocalhostRequest } from "../../utils/is-localhost.js";
 
 export function createSettingsRoutes(): Hono {
   const app = new Hono();
@@ -36,8 +36,7 @@ export function createSettingsRoutes(): Hono {
       return c.json({ error: `rotation_strategy must be one of: ${ROTATION_STRATEGIES.join(", ")}` });
     }
 
-    const configPath = resolve(getConfigDir(), "default.yaml");
-    mutateYaml(configPath, (data) => {
+    mutateYaml(getLocalConfigPath(), (data) => {
       if (!data.auth) data.auth = {};
       (data.auth as Record<string, unknown>).rotation_strategy = body.rotation_strategy;
     });
@@ -73,14 +72,97 @@ export function createSettingsRoutes(): Hono {
     const body = await c.req.json() as { proxy_api_key?: string | null };
     const newKey = body.proxy_api_key === undefined ? currentKey : (body.proxy_api_key || null);
 
-    const configPath = resolve(getConfigDir(), "default.yaml");
-    mutateYaml(configPath, (data) => {
-      const server = data.server as Record<string, unknown>;
-      server.proxy_api_key = newKey;
+    // Prevent remote sessions from clearing the key (would disable login gate)
+    if (currentKey && !newKey) {
+      const remoteAddr = getConnInfo(c).remote.address ?? "";
+      if (!isLocalhostRequest(remoteAddr)) {
+        c.status(403);
+        return c.json({ error: "Cannot clear API key from remote session — this would disable the login gate" });
+      }
+    }
+
+    mutateYaml(getLocalConfigPath(), (data) => {
+      if (!data.server) data.server = {};
+      (data.server as Record<string, unknown>).proxy_api_key = newKey;
     });
     reloadAllConfigs();
 
     return c.json({ success: true, proxy_api_key: newKey });
+  });
+
+  // --- General (server/tls) settings ---
+
+  app.get("/admin/general-settings", (c) => {
+    const config = getConfig();
+    return c.json({
+      port: config.server.port,
+      proxy_url: config.tls.proxy_url,
+      force_http11: config.tls.force_http11,
+    });
+  });
+
+  app.post("/admin/general-settings", async (c) => {
+    const config = getConfig();
+    const currentKey = config.server.proxy_api_key;
+
+    if (currentKey) {
+      const authHeader = c.req.header("Authorization") ?? "";
+      const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
+      if (token !== currentKey) {
+        c.status(401);
+        return c.json({ error: "Invalid current API key" });
+      }
+    }
+
+    const body = await c.req.json() as {
+      port?: number;
+      proxy_url?: string | null;
+      force_http11?: boolean;
+    };
+
+    // --- validation ---
+    if (body.port !== undefined) {
+      if (!Number.isInteger(body.port) || body.port < 1 || body.port > 65535) {
+        c.status(400);
+        return c.json({ error: "port must be an integer between 1 and 65535" });
+      }
+    }
+
+    if (body.proxy_url !== undefined && body.proxy_url !== null) {
+      try {
+        new URL(body.proxy_url);
+      } catch {
+        c.status(400);
+        return c.json({ error: "proxy_url must be a valid URL or null" });
+      }
+    }
+
+    const oldPort = config.server.port;
+
+    mutateYaml(getLocalConfigPath(), (data) => {
+      if (body.port !== undefined) {
+        if (!data.server) data.server = {};
+        (data.server as Record<string, unknown>).port = body.port;
+      }
+      if (body.proxy_url !== undefined) {
+        if (!data.tls) data.tls = {};
+        (data.tls as Record<string, unknown>).proxy_url = body.proxy_url;
+      }
+      if (body.force_http11 !== undefined) {
+        if (!data.tls) data.tls = {};
+        (data.tls as Record<string, unknown>).force_http11 = body.force_http11;
+      }
+    });
+    reloadAllConfigs();
+
+    const updated = getConfig();
+    return c.json({
+      success: true,
+      port: updated.server.port,
+      proxy_url: updated.tls.proxy_url,
+      force_http11: updated.tls.force_http11,
+      restart_required: body.port !== undefined && body.port !== oldPort,
+    });
   });
 
   // --- Quota settings ---
@@ -132,8 +214,7 @@ export function createSettingsRoutes(): Hono {
       }
     }
 
-    const configPath = resolve(getConfigDir(), "default.yaml");
-    mutateYaml(configPath, (data) => {
+    mutateYaml(getLocalConfigPath(), (data) => {
       if (!data.quota) data.quota = {};
       const quota = data.quota as Record<string, unknown>;
       if (body.refresh_interval_minutes !== undefined) {

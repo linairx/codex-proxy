@@ -1,0 +1,219 @@
+/**
+ * Tests for general settings endpoints.
+ * GET  /admin/general-settings — read current server/tls config
+ * POST /admin/general-settings — update server/tls config
+ */
+
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+// --- Mocks (before any imports) ---
+
+const mockConfig = {
+  server: { port: 8080, proxy_api_key: null as string | null },
+  tls: { proxy_url: null as string | null, force_http11: false },
+  quota: {
+    refresh_interval_minutes: 5,
+    warning_thresholds: { primary: [80, 90], secondary: [80, 90] },
+    skip_exhausted: true,
+  },
+  auth: { rotation_strategy: "least_used" },
+};
+
+vi.mock("../../config.js", () => ({
+  getConfig: vi.fn(() => mockConfig),
+  reloadAllConfigs: vi.fn(),
+  getLocalConfigPath: vi.fn(() => "/tmp/test/local.yaml"),
+  ROTATION_STRATEGIES: ["least_used", "round_robin", "sticky"],
+}));
+
+vi.mock("../../paths.js", () => ({
+  getConfigDir: vi.fn(() => "/tmp/test-config"),
+  getPublicDir: vi.fn(() => "/tmp/test-public"),
+  getDesktopPublicDir: vi.fn(() => "/tmp/test-desktop"),
+  getDataDir: vi.fn(() => "/tmp/test-data"),
+  getBinDir: vi.fn(() => "/tmp/test-bin"),
+  isEmbedded: vi.fn(() => false),
+}));
+
+vi.mock("../../utils/yaml-mutate.js", () => ({
+  mutateYaml: vi.fn(),
+}));
+
+vi.mock("../../tls/transport.js", () => ({
+  getTransport: vi.fn(),
+  getTransportInfo: vi.fn(() => ({})),
+}));
+
+vi.mock("../../tls/curl-binary.js", () => ({
+  getCurlDiagnostics: vi.fn(() => ({})),
+}));
+
+vi.mock("../../fingerprint/manager.js", () => ({
+  buildHeaders: vi.fn(() => ({})),
+}));
+
+vi.mock("../../update-checker.js", () => ({
+  getUpdateState: vi.fn(() => ({})),
+  checkForUpdate: vi.fn(),
+  isUpdateInProgress: vi.fn(() => false),
+}));
+
+vi.mock("../../self-update.js", () => ({
+  getProxyInfo: vi.fn(() => ({})),
+  canSelfUpdate: vi.fn(() => false),
+  checkProxySelfUpdate: vi.fn(),
+  applyProxySelfUpdate: vi.fn(),
+  isProxyUpdateInProgress: vi.fn(() => false),
+  getCachedProxyUpdateResult: vi.fn(() => null),
+  getDeployMode: vi.fn(() => "git"),
+}));
+
+vi.mock("@hono/node-server/serve-static", () => ({
+  serveStatic: vi.fn(() => vi.fn()),
+}));
+
+vi.mock("@hono/node-server/conninfo", () => ({
+  getConnInfo: vi.fn(() => ({ remote: { address: "127.0.0.1" } })),
+}));
+
+import { createWebRoutes } from "../web.js";
+import { mutateYaml } from "../../utils/yaml-mutate.js";
+import { reloadAllConfigs } from "../../config.js";
+
+const mockPool = {
+  getAll: vi.fn(() => []),
+  acquire: vi.fn(),
+  release: vi.fn(),
+} as unknown as Parameters<typeof createWebRoutes>[0];
+
+const mockUsageStats = {} as unknown as Parameters<typeof createWebRoutes>[1];
+
+function makeApp() {
+  return createWebRoutes(mockPool, mockUsageStats);
+}
+
+describe("GET /admin/general-settings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfig.server.port = 8080;
+    mockConfig.server.proxy_api_key = null;
+    mockConfig.tls.proxy_url = null;
+    mockConfig.tls.force_http11 = false;
+  });
+
+  it("returns current values", async () => {
+    const app = makeApp();
+    const res = await app.request("/admin/general-settings");
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data).toEqual({
+      port: 8080,
+      proxy_url: null,
+      force_http11: false,
+    });
+  });
+});
+
+describe("POST /admin/general-settings", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockConfig.server.port = 8080;
+    mockConfig.server.proxy_api_key = null;
+    mockConfig.tls.proxy_url = null;
+    mockConfig.tls.force_http11 = false;
+  });
+
+  it("changing port sets restart_required: true", async () => {
+    const app = makeApp();
+    const res = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ port: 9090 }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.restart_required).toBe(true);
+    expect(mutateYaml).toHaveBeenCalledOnce();
+    expect(reloadAllConfigs).toHaveBeenCalledOnce();
+  });
+
+  it("changing proxy_url sets restart_required: false", async () => {
+    const app = makeApp();
+    const res = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proxy_url: "http://127.0.0.1:7890" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.restart_required).toBe(false);
+    expect(mutateYaml).toHaveBeenCalledOnce();
+  });
+
+  it("changing force_http11 sets restart_required: false", async () => {
+    const app = makeApp();
+    const res = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_http11: true }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.success).toBe(true);
+    expect(data.restart_required).toBe(false);
+  });
+
+  it("rejects port out of range", async () => {
+    const app = makeApp();
+
+    const res1 = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ port: 0 }),
+    });
+    expect(res1.status).toBe(400);
+
+    const res2 = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ port: 70000 }),
+    });
+    expect(res2.status).toBe(400);
+  });
+
+  it("rejects invalid proxy_url format", async () => {
+    const app = makeApp();
+    const res = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ proxy_url: "not-a-url" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("requires auth when proxy_api_key is set", async () => {
+    mockConfig.server.proxy_api_key = "my-secret";
+    const app = makeApp();
+
+    // No auth -> 401
+    const res1 = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force_http11: true }),
+    });
+    expect(res1.status).toBe(401);
+
+    // With auth -> 200
+    const res2 = await app.request("/admin/general-settings", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: "Bearer my-secret",
+      },
+      body: JSON.stringify({ force_http11: true }),
+    });
+    expect(res2.status).toBe(200);
+  });
+});
